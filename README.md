@@ -1,0 +1,33 @@
+# MoharamBake PWA
+
+Mobile-first bakery ordering app for Moharam Basha residents.
+
+## Current MVP features
+- Product menu and categories
+- Cart
+- Customer details saved locally
+- Tomorrow delivery slots
+- Active Orders icon in the header
+- Active order list
+- Cancel order before 10 PM
+- PWA install support
+- Demo mode
+- Google Apps Script backend for Products, Orders, OrderItems and Customers
+- Server-side 10 PM cancellation check when live
+
+## Demo mode
+`app.js` currently has `DEMO_MODE: true`, so orders are stored locally on the device and use demo products.
+
+## Going live with Google Sheets
+1. Open the Apps Script file under `google-apps-script/MoharamBakeBackend.gs`.
+2. Paste it into the Apps Script project attached to your Google Sheet.
+3. Deploy as Web App, Execute as you, access Anyone.
+4. Copy the `/exec` URL.
+5. Put that URL in `CONFIG.API_URL` in `app.js`.
+6. Change `DEMO_MODE` to `false`.
+7. Redeploy/update GitHub Pages.
+
+The backend uses spreadsheet ID:
+`1y3FMn3N_sq8GqSjlSpyobkoIdAWINkPyAYPTMYVkpjg`
+
+Do not put secrets or access tokens in this frontend repository.
