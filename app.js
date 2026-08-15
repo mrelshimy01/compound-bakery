@@ -1141,10 +1141,9 @@ async function syncCustomerOrders() {
     !customer ||
     !customer.phone
   ) {
-
-    activeOrders = [];
-
-    saveOrders();
+    console.warn(
+      "Order sync skipped: no customer phone."
+    );
 
     return;
   }
@@ -1160,10 +1159,16 @@ async function syncCustomerOrders() {
       "&_=" +
       Date.now();
 
+    console.log(
+      "Syncing orders for phone:",
+      customer.phone
+    );
+
     const response =
       await fetch(url, {
         method: "GET",
-        cache: "no-store"
+        cache: "no-store",
+        redirect: "follow"
       });
 
     if (!response.ok) {
@@ -1175,6 +1180,11 @@ async function syncCustomerOrders() {
     const result =
       await response.json();
 
+    console.log(
+      "Orders API response:",
+      result
+    );
+
     if (!result.ok) {
       throw new Error(
         result.error ||
@@ -1182,10 +1192,65 @@ async function syncCustomerOrders() {
       );
     }
 
-    activeOrders =
+    const serverOrders =
       Array.isArray(result.orders)
         ? result.orders
         : [];
+
+    /*
+     * IMPORTANT:
+     *
+     * Never wipe locally-known active orders just
+     * because Google Sheets temporarily returned zero.
+     */
+
+    if (serverOrders.length > 0) {
+
+      const mergedOrders = [
+        ...serverOrders
+      ];
+
+      /*
+       * Keep locally-created active orders that
+       * the server has not returned yet.
+       */
+
+      activeOrders.forEach(
+        localOrder => {
+
+          const alreadyExists =
+            mergedOrders.some(
+              serverOrder =>
+                String(
+                  serverOrder.orderId
+                ) ===
+                String(
+                  localOrder.orderId
+                )
+            );
+
+          if (
+            !alreadyExists &&
+            String(localOrder.status)
+              .toLowerCase() === "active"
+          ) {
+            mergedOrders.push(
+              localOrder
+            );
+          }
+        }
+      );
+
+      activeOrders =
+        mergedOrders;
+
+    } else {
+
+      console.warn(
+        "Orders API returned zero orders. Keeping local active orders.",
+        activeOrders
+      );
+    }
 
     saveOrders();
 
@@ -1197,6 +1262,11 @@ async function syncCustomerOrders() {
       "Order sync failed:",
       error
     );
+
+    /*
+     * Keep local orders if the API is temporarily
+     * unavailable.
+     */
 
     renderOrders();
   }
@@ -1518,7 +1588,6 @@ async function cancelActiveOrder(
 
 function setupNavigation() {
 
-  // Logo → Home
   const logo =
     $("homeLogoBtn");
 
@@ -1528,7 +1597,6 @@ function setupNavigation() {
     };
   }
 
-  // Start ordering
   const start =
     $("startBtn");
 
@@ -1560,6 +1628,7 @@ function setupNavigation() {
         `;
 
         await loadProducts();
+
       } else {
 
         renderCats();
@@ -1568,7 +1637,6 @@ function setupNavigation() {
     };
   }
 
-  // Cart top button
   const cartButton =
     $("cartBtn");
 
@@ -1577,7 +1645,6 @@ function setupNavigation() {
       openCart;
   }
 
-  // Cart button inside menu
   const menuCart =
     $("menuCart");
 
@@ -1586,7 +1653,6 @@ function setupNavigation() {
       openCart;
   }
 
-  // Close cart
   const close =
     $("close");
 
@@ -1605,7 +1671,6 @@ function setupNavigation() {
       closeCart;
   }
 
-  // Checkout
   const checkout =
     $("checkoutBtn");
 
@@ -1629,7 +1694,6 @@ function setupNavigation() {
     };
   }
 
-  // Back from checkout
   const back =
     $("back");
 
@@ -1644,7 +1708,6 @@ function setupNavigation() {
     };
   }
 
-  // Orders
   const ordersButton =
     $("ordersBtn");
 
@@ -1661,7 +1724,6 @@ function setupNavigation() {
       };
   }
 
-  // Back from active orders
   const ordersBack =
     $("ordersBackBtn");
 
@@ -1673,7 +1735,6 @@ function setupNavigation() {
     };
   }
 
-  // Order from empty orders
   const orderEmpty =
     $("orderFromEmpty");
 
@@ -1693,7 +1754,6 @@ function setupNavigation() {
       };
   }
 
-  // Order again
   const again =
     $("again");
 
@@ -1712,7 +1772,6 @@ function setupNavigation() {
     };
   }
 
-  // View orders after success
   const viewOrders =
     $("viewOrdersAfterSuccess");
 
@@ -1773,12 +1832,6 @@ async function init() {
 
   renderCart();
   renderOrders();
-
-  // Don't load Google Sheets until the user
-  // actually enters the menu.
-  //
-  // This prevents unnecessary Apps Script
-  // requests when opening the home page.
 
   console.log(
     "MoharamBake ready."
