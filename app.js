@@ -444,8 +444,8 @@ $("ordersBtn").onclick = async () => {
   renderOrders();
   await syncCustomerOrders();
 };
-$("homeLogoBtn").onclick = () => show("home");
-$("ordersBackBtn").onclick = () => show("home");
+if ($("homeLogoBtn")) $("homeLogoBtn").onclick = () => show("home");
+if ($("ordersBackBtn")) $("ordersBackBtn").onclick = () => show("home");
 $("cartBtn").onclick = openCart;
 $("menuCart").onclick = openCart;
 $("close").onclick = closeCart;
