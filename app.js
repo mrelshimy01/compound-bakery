@@ -25,17 +25,14 @@ let customer = JSON.parse(
 /*
  * IMPORTANT:
  *
- * Active orders are NOT stored locally.
+ * Active orders are NEVER stored locally.
  * Google Sheets is the single source of truth.
- *
- * Older versions of the app stored active orders
- * in localStorage. We intentionally do not read them.
  */
 let activeOrders = [];
 
 /*
- * Remove any old locally cached orders created
- * by previous versions of the application.
+ * Delete the old local order cache from previous
+ * versions of the application.
  */
 localStorage.removeItem("mb_active_orders");
 
@@ -50,15 +47,6 @@ const $ = id => document.getElementById(id);
    PHONE NUMBER
 ========================================================= */
 
-/*
- * MoharamBake ALWAYS uses Egyptian LOCAL format.
- *
- * +201275122774   -> 01275122774
- * 00201275122774  -> 01275122774
- * 201275122774    -> 01275122774
- * 01275122774     -> 01275122774
- * 1275122774      -> 01275122774
- */
 function normalizePhone(phone) {
 
   if (
@@ -80,21 +68,10 @@ function normalizePhone(phone) {
   value =
     value.replace(/\.0$/, "");
 
-  if (value.startsWith("0020")) {
-
-    value =
-      "0" +
-      value.substring(4);
-
-  } else if (
-    value.startsWith("002")
-  ) {
-
-    value =
-      "0" +
-      value.substring(3);
-
-  } else if (
+  /*
+   * +20XXXXXXXXXX
+   */
+  if (
     value.startsWith("20") &&
     value.length === 12
   ) {
@@ -104,9 +81,36 @@ function normalizePhone(phone) {
       value.substring(2);
   }
 
+  /*
+   * 0020XXXXXXXXXX
+   */
+  else if (
+    value.startsWith("0020")
+  ) {
+
+    value =
+      "0" +
+      value.substring(4);
+  }
+
+  /*
+   * 002XXXXXXXXXX
+   */
+  else if (
+    value.startsWith("002")
+  ) {
+
+    value =
+      "0" +
+      value.substring(3);
+  }
+
   value =
     value.replace(/\D/g, "");
 
+  /*
+   * 1275122774 -> 01275122774
+   */
   if (
     value.length === 10 &&
     value.startsWith("1")
@@ -117,23 +121,121 @@ function normalizePhone(phone) {
       value;
   }
 
-  if (
-    value.startsWith("20") &&
-    value.length === 12
-  ) {
-
-    value =
-      "0" +
-      value.substring(2);
-  }
-
   return value;
 }
 
 
+/* =========================================================
+   USER ID
+========================================================= */
+
 /*
- * Normalize customer information before storing it.
+ * The User ID is deterministic.
+ *
+ * Same phone number = same User ID.
+ *
+ * Example:
+ *
+ * 01275122774
+ * ->
+ * MBU-184C1A84939B3AF78B9C
+ *
+ * We use SHA-256 and take the first 20 hex characters.
+ *
+ * The Google Apps Script uses the same SHA-256 algorithm.
  */
+
+async function generateUserId(phone) {
+
+  const normalized =
+    normalizePhone(phone);
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (
+    window.crypto &&
+    window.crypto.subtle
+  ) {
+
+    const data =
+      new TextEncoder().encode(
+        normalized
+      );
+
+    const hashBuffer =
+      await crypto.subtle.digest(
+        "SHA-256",
+        data
+      );
+
+    const hashArray =
+      Array.from(
+        new Uint8Array(
+          hashBuffer
+        )
+      );
+
+    const hashHex =
+      hashArray
+        .map(
+          byte =>
+            byte
+              .toString(16)
+              .padStart(2, "0")
+        )
+        .join("")
+        .substring(0, 20)
+        .toUpperCase();
+
+    return "MBU-" + hashHex;
+  }
+
+  throw new Error(
+    "Your browser does not support secure User ID generation."
+  );
+}
+
+
+/*
+ * Make sure the customer has the correct User ID.
+ *
+ * IMPORTANT:
+ * We regenerate it from the current phone every time.
+ * This prevents a stale User ID if the customer changes
+ * their phone number.
+ */
+async function ensureCustomerUserId() {
+
+  if (!customer) {
+    return "";
+  }
+
+  customer =
+    normalizeCustomer(
+      customer
+    );
+
+  if (!customer.phone) {
+    return "";
+  }
+
+  customer.userId =
+    await generateUserId(
+      customer.phone
+    );
+
+  saveCustomer();
+
+  return customer.userId;
+}
+
+
+/* =========================================================
+   CUSTOMER
+========================================================= */
+
 function normalizeCustomer(data) {
 
   if (!data) {
@@ -141,6 +243,11 @@ function normalizeCustomer(data) {
   }
 
   return {
+
+    userId:
+      String(
+        data.userId || ""
+      ).trim(),
 
     name:
       String(
@@ -223,10 +330,11 @@ function show(screenId) {
 
   document
     .querySelectorAll(".screen")
-    .forEach(screen =>
-      screen.classList.remove(
-        "active"
-      )
+    .forEach(
+      screen =>
+        screen.classList.remove(
+          "active"
+        )
     );
 
   const target =
@@ -288,10 +396,7 @@ function saveCustomer() {
 
 
 /*
- * IMPORTANT:
- *
- * Active orders are server-owned.
- * Never save active orders to localStorage.
+ * Orders are NOT saved locally.
  */
 function saveOrders() {
 
@@ -299,9 +404,6 @@ function saveOrders() {
 }
 
 
-/*
- * Clean old local customer data once.
- */
 function normalizeStoredCustomer() {
 
   if (!customer) {
@@ -695,32 +797,34 @@ async function loadProducts() {
 
     products =
       data.products
-        .map(product => ({
+        .map(
+          product => ({
 
-          id:
-            product.id,
+            id:
+              product.id,
 
-          name:
-            product.name,
+            name:
+              product.name,
 
-          category:
-            product.category ||
-            "Bakery",
+            category:
+              product.category ||
+              "Bakery",
 
-          price:
-            Number(
-              product.price
-            ) || 0,
+            price:
+              Number(
+                product.price
+              ) || 0,
 
-          emoji:
-            product.emoji ||
-            "🥖",
+            emoji:
+              product.emoji ||
+              "🥖",
 
-          active:
-            product.active !==
-            false
+            active:
+              product.active !==
+              false
 
-        }))
+          })
+        )
         .filter(
           product =>
             product.name &&
@@ -775,6 +879,7 @@ function renderProductsError(
   }
 
   container.innerHTML = `
+
     <div
       class="card"
       style="
@@ -783,6 +888,7 @@ function renderProductsError(
         padding:30px 18px;
       "
     >
+
       <div style="font-size:42px">
         🥖
       </div>
@@ -808,6 +914,7 @@ function renderProductsError(
       >
         Refresh menu
       </button>
+
     </div>
   `;
 
@@ -901,30 +1008,33 @@ function renderCats() {
     .querySelectorAll(
       ".chip"
     )
-    .forEach(button => {
+    .forEach(
+      button => {
 
-      button.onclick =
-        () => {
+        button.onclick =
+          () => {
 
-          container
-            .querySelectorAll(
-              ".chip"
-            )
-            .forEach(x =>
-              x.classList.remove(
-                "active"
+            container
+              .querySelectorAll(
+                ".chip"
               )
+              .forEach(
+                x =>
+                  x.classList.remove(
+                    "active"
+                  )
+              );
+
+            button.classList.add(
+              "active"
             );
 
-          button.classList.add(
-            "active"
-          );
-
-          renderProducts(
-            button.dataset.cat
-          );
-        };
-    });
+            renderProducts(
+              button.dataset.cat
+            );
+          };
+      }
+    );
 }
 
 
@@ -1013,17 +1123,19 @@ function renderProducts(
     .querySelectorAll(
       ".add"
     )
-    .forEach(button => {
+    .forEach(
+      button => {
 
-      button.onclick =
-        () => {
+        button.onclick =
+          () => {
 
-          add(
-            button.dataset
-              .productId
-          );
-        };
-    });
+            add(
+              button.dataset
+                .productId
+            );
+          };
+      }
+    );
 }
 
 
@@ -1222,24 +1334,26 @@ function renderCart() {
       .querySelectorAll(
         "button"
       )
-      .forEach(button => {
+      .forEach(
+        button => {
 
-        const id =
-          button.dataset.id;
+          const id =
+            button.dataset.id;
 
-        const delta =
-          button.dataset.action ===
-          "plus"
-            ? 1
-            : -1;
+          const delta =
+            button.dataset.action ===
+            "plus"
+              ? 1
+              : -1;
 
-        button.onclick =
-          () =>
-            change(
-              id,
-              delta
-            );
-      });
+          button.onclick =
+            () =>
+              change(
+                id,
+                delta
+              );
+        }
+      );
   }
 
   if (totalElement) {
@@ -1405,17 +1519,19 @@ function renderCheckout() {
       .querySelectorAll(
         ".slot"
       )
-      .forEach(button => {
+      .forEach(
+        button => {
 
-        button.onclick =
-          () => {
+          button.onclick =
+            () => {
 
-            selectedSlot =
-              button.dataset.slot;
+              selectedSlot =
+                button.dataset.slot;
 
-            renderCheckout();
-          };
-      });
+              renderCheckout();
+            };
+        }
+      );
   }
 
   if (customer) {
@@ -1471,10 +1587,6 @@ async function createOrder() {
   const name =
     $("name")?.value.trim();
 
-  /*
-   * IMPORTANT:
-   * Normalize immediately when user submits.
-   */
   const phone =
     normalizePhone(
       $("phone")?.value.trim()
@@ -1497,9 +1609,23 @@ async function createOrder() {
   }
 
   /*
-   * Also update the visible input to the
-   * canonical local format.
+   * Generate the User ID from the normalized
+   * phone number.
    */
+  const userId =
+    await generateUserId(
+      phone
+    );
+
+  if (!userId) {
+
+    toast(
+      "Unable to create your User ID."
+    );
+
+    return;
+  }
+
   if ($("phone")) {
 
     $("phone").value =
@@ -1522,8 +1648,12 @@ async function createOrder() {
 
   const normalizedCustomer = {
 
+    userId,
+
     name,
+
     phone,
+
     address
   };
 
@@ -1532,13 +1662,14 @@ async function createOrder() {
     action:
       "createOrder",
 
+    /*
+     * USER ID IS NOW THE PRIMARY CUSTOMER KEY.
+     */
+    userId,
+
     customer:
       normalizedCustomer,
 
-    /*
-     * Also send top-level values so the backend
-     * remains compatible with both formats.
-     */
     name,
     phone,
     address,
@@ -1550,35 +1681,37 @@ async function createOrder() {
       selectedSlot,
 
     items:
-      cart.map(item => ({
+      cart.map(
+        item => ({
 
-        id:
-          item.id,
+          id:
+            item.id,
 
-        productId:
-          item.id,
+          productId:
+            item.id,
 
-        name:
-          item.name,
+          name:
+            item.name,
 
-        product:
-          item.name,
+          product:
+            item.name,
 
-        price:
-          Number(
-            item.price
-          ),
+          price:
+            Number(
+              item.price
+            ),
 
-        qty:
-          Number(
-            item.qty
-          ),
+          qty:
+            Number(
+              item.qty
+            ),
 
-        quantity:
-          Number(
-            item.qty
-          )
-      }))
+          quantity:
+            Number(
+              item.qty
+            )
+        })
+      )
   };
 
   try {
@@ -1643,55 +1776,47 @@ async function createOrder() {
       status:
         "Active",
 
-      phone:
-        phone,
+      phone,
+
+      userId,
 
       items:
-        cart.map(item => ({
+        cart.map(
+          item => ({
 
-          id:
-            item.id,
+            id:
+              item.id,
 
-          name:
-            item.name,
+            name:
+              item.name,
 
-          qty:
-            item.qty,
+            qty:
+              item.qty,
 
-          price:
-            item.price
-        }))
+            price:
+              item.price
+          })
+        )
     };
 
     /*
-     * IMPORTANT:
+     * DO NOT add the order locally.
      *
-     * Do NOT add the order to local activeOrders.
      * Google Sheets is the source of truth.
      */
-
     activeOrders = [];
 
-    /*
-     * Clear the cart immediately.
-     */
     cart = [];
 
     saveCart();
 
-    /*
-     * Render the success page immediately.
-     */
     renderSuccess();
 
     show("success");
 
     /*
-     * Now retrieve the actual order from Google Sheets.
-     * We do NOT use localStorage as a fallback.
-     *
-     * The backend may need a moment to finish writing,
-     * so wait briefly before syncing.
+     * Allow Apps Script enough time to write
+     * the order, then retrieve by USER ID.
      */
     setTimeout(
       syncCustomerOrders,
@@ -1808,13 +1933,6 @@ async function syncCustomerOrders() {
     !customer.phone
   ) {
 
-    console.warn(
-      "Order sync skipped: no customer phone."
-    );
-
-    /*
-     * No customer = no server orders.
-     */
     activeOrders = [];
 
     renderOrders();
@@ -1823,30 +1941,42 @@ async function syncCustomerOrders() {
   }
 
   /*
-   * Normalize the stored phone before
-   * every server request.
+   * Always derive the User ID from the
+   * current normalized phone.
    */
-  customer.phone =
-    normalizePhone(
-      customer.phone
-    );
+  const userId =
+    await ensureCustomerUserId();
 
-  saveCustomer();
+  if (!userId) {
+
+    activeOrders = [];
+
+    renderOrders();
+
+    return;
+  }
 
   try {
 
+    /*
+     * IMPORTANT:
+     *
+     * There is NO phone parameter anymore.
+     *
+     * Orders are retrieved ONLY using userId.
+     */
     const url =
       CONFIG.API_URL +
-      "?action=orders&phone=" +
+      "?action=orders&userId=" +
       encodeURIComponent(
-        customer.phone
+        userId
       ) +
       "&_=" +
       Date.now();
 
     console.log(
-      "Syncing orders for normalized phone:",
-      customer.phone
+      "Syncing orders for User ID:",
+      userId
     );
 
     const response =
@@ -1890,55 +2020,16 @@ async function syncCustomerOrders() {
         : [];
 
     /*
-     * Normalize every server order.
+     * SERVER IS THE ONLY SOURCE OF TRUTH.
+     *
+     * If Google Sheets says []:
+     * activeOrders becomes [].
+     *
+     * No local orders are merged back in.
      */
-    serverOrders.forEach(
-      order => {
-
-        if (order.phone) {
-
-          order.phone =
-            normalizePhone(
-              order.phone
-            );
-        }
-      }
-    );
-
-    /*
-     * =====================================================
-     * GOOGLE SHEETS IS THE SINGLE SOURCE OF TRUTH
-     * =====================================================
-     *
-     * NEVER merge server orders with local orders.
-     *
-     * If Google Sheets returns:
-     *
-     *   [order1, order2]
-     *
-     * the app shows:
-     *
-     *   order1, order2
-     *
-     * If Google Sheets returns:
-     *
-     *   []
-     *
-     * the app shows:
-     *
-     *   ZERO ORDERS
-     *
-     * This means deleting an order from Google Sheets
-     * will remove it from the app on the next sync.
-     */
-
     activeOrders =
       serverOrders;
 
-    /*
-     * saveOrders() only updates the badge.
-     * It does NOT write anything to localStorage.
-     */
     saveOrders();
 
     renderOrders();
@@ -1951,14 +2042,10 @@ async function syncCustomerOrders() {
     );
 
     /*
-     * IMPORTANT:
-     *
-     * We do NOT use localStorage as a fallback.
-     *
-     * If the server cannot be reached, keep the
-     * current in-memory state rather than resurrecting
-     * deleted orders from an old local cache.
+     * Do NOT resurrect local orders.
      */
+    activeOrders = [];
+
     renderOrders();
   }
 }
@@ -2074,7 +2161,9 @@ function renderOrders() {
 
                 <div>
 
-                  <div class="order-number">
+                  <div
+                    class="order-number"
+                  >
 
                     ${esc(
                       order.orderId
@@ -2082,7 +2171,9 @@ function renderOrders() {
 
                   </div>
 
-                  <div class="order-date">
+                  <div
+                    class="order-date"
+                  >
 
                     ${
                       order.createdAt ||
@@ -2098,7 +2189,9 @@ function renderOrders() {
 
                 </div>
 
-                <div class="order-status">
+                <div
+                  class="order-status"
+                >
                   Active
                 </div>
 
@@ -2106,7 +2199,9 @@ function renderOrders() {
 
               ${items}
 
-              <div class="order-total">
+              <div
+                class="order-total"
+              >
 
                 <span>
                   Total
@@ -2176,15 +2271,17 @@ function renderOrders() {
     .querySelectorAll(
       ".cancel-order-button"
     )
-    .forEach(button => {
+    .forEach(
+      button => {
 
-      button.onclick =
-        () =>
-          cancelActiveOrder(
-            button.dataset
-              .orderId
-          );
-    });
+        button.onclick =
+          () =>
+            cancelActiveOrder(
+              button.dataset
+                .orderId
+            );
+      }
+    );
 }
 
 
@@ -2273,6 +2370,16 @@ async function cancelActiveOrder(
 
   try {
 
+    const userId =
+      await ensureCustomerUserId();
+
+    if (!userId) {
+
+      throw new Error(
+        "Customer User ID is missing."
+      );
+    }
+
     const response =
       await fetch(
         CONFIG.API_URL,
@@ -2294,13 +2401,10 @@ async function cancelActiveOrder(
                 order.orderId,
 
               /*
-               * ALWAYS send local format.
+               * Cancellation is now performed
+               * using User ID, NOT phone.
                */
-              phone:
-                normalizePhone(
-                  customer?.phone ||
-                  ""
-                )
+              userId
             })
         }
       );
@@ -2324,10 +2428,8 @@ async function cancelActiveOrder(
     }
 
     /*
-     * Remove the cancelled order from
-     * the current in-memory server state.
-     *
-     * It is NOT saved to localStorage.
+     * Remove from current in-memory state.
+     * Nothing is written to localStorage.
      */
     activeOrders =
       activeOrders.filter(
@@ -2550,10 +2652,6 @@ function setupNavigation() {
 
         show("orders");
 
-        /*
-         * Render current in-memory state first,
-         * then ALWAYS refresh from Google Sheets.
-         */
         renderOrders();
 
         await syncCustomerOrders();
@@ -2666,23 +2764,45 @@ async function init() {
   );
 
   /*
-   * Clean old stored phone format.
+   * Normalize old customer data.
    */
   normalizeStoredCustomer();
 
   /*
-   * Make absolutely sure no old active-order
-   * cache survives from a previous version.
+   * Completely remove old order-cache system.
    */
   localStorage.removeItem(
     "mb_active_orders"
   );
 
-  /*
-   * Active orders always start empty.
-   * They will be loaded from Google Sheets.
-   */
   activeOrders = [];
+
+  /*
+   * If the customer already exists,
+   * generate their User ID immediately.
+   */
+  if (
+    customer &&
+    customer.phone
+  ) {
+
+    try {
+
+      await ensureCustomerUserId();
+
+      console.log(
+        "Customer User ID:",
+        customer.userId
+      );
+
+    } catch (error) {
+
+      console.warn(
+        "Unable to generate User ID:",
+        error
+      );
+    }
+  }
 
   updateCartBadges();
   updateOrdersBadge();
@@ -2695,15 +2815,14 @@ async function init() {
   renderOrders();
 
   /*
-   * If an existing customer is stored,
-   * sync their orders from Google Sheets.
+   * Retrieve active orders ONLY by User ID.
    */
   if (
     customer &&
-    customer.phone
+    customer.userId
   ) {
 
-    syncCustomerOrders();
+    await syncCustomerOrders();
   }
 
   console.log(
@@ -2723,7 +2842,9 @@ if (
 
   document.addEventListener(
     "DOMContentLoaded",
-    init
+    () => {
+      init();
+    }
   );
 
 } else {
