@@ -21,6 +21,7 @@ let cart = JSON.parse(localStorage.getItem("mb_cart") || "[]");
 let customer = JSON.parse(localStorage.getItem("mb_customer") || "null");
 let activeOrders = JSON.parse(localStorage.getItem("mb_active_orders") || "[]");
 let selectedSlot = "";
+let deferredInstallPrompt = null;
 
 const $ = id => document.getElementById(id);
 
@@ -72,6 +73,108 @@ function isCancellationOpen() {
   const cutoff = new Date();
   cutoff.setHours(22,0,0,0);
   return now < cutoff;
+}
+
+
+/* =========================
+   INSTALL APP
+========================= */
+
+function isIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+function isAndroid() {
+  return /android/i.test(navigator.userAgent);
+}
+
+function isStandalone() {
+  return window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true;
+}
+
+function setupInstallCTA() {
+  const btn = $("installAppBtn");
+  const hint = $("installHint");
+
+  if (!btn) return;
+
+  if (isStandalone()) {
+    btn.classList.add("installed");
+    return;
+  }
+
+  if (isIOS()) {
+    hint.textContent = "Add it to your iPhone Home Screen";
+  } else if (isAndroid()) {
+    hint.textContent = "Install it on your Android phone";
+  } else {
+    hint.textContent = "Install it on your phone";
+  }
+
+  btn.onclick = async () => {
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+
+      const result = await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+
+      if (result.outcome === "accepted") {
+        btn.classList.add("installed");
+      }
+
+      return;
+    }
+
+    showInstallInstructions();
+  };
+}
+
+function showInstallInstructions() {
+  const help = $("installHelp");
+  const title = $("installTitle");
+  const text = $("installText");
+
+  if (!help || !title || !text) return;
+
+  if (isIOS()) {
+    title.textContent = "Install on iPhone";
+    text.innerHTML =
+      'Open this page in <strong>Safari</strong>, tap the <strong>Share</strong> button, then choose <strong>Add to Home Screen</strong>.';
+  } else if (isAndroid()) {
+    title.textContent = "Install on Android";
+    text.innerHTML =
+      'In Chrome, tap the <strong>Install</strong> button if shown, or open the <strong>⋮ menu</strong> and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.';
+  } else {
+    title.textContent = "Install MoharamBake";
+    text.innerHTML =
+      'Open this site on your phone. On Android use Chrome → <strong>Install app</strong>. On iPhone use Safari → <strong>Share → Add to Home Screen</strong>.';
+  }
+
+  help.hidden = false;
+}
+
+function setupInstallPrompt() {
+  window.addEventListener("beforeinstallprompt", event => {
+    event.preventDefault();
+    deferredInstallPrompt = event;
+    setupInstallCTA();
+  });
+
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    const btn = $("installAppBtn");
+    if (btn) btn.classList.add("installed");
+  });
+
+  const close = $("closeInstallHelp");
+  if (close) {
+    close.onclick = () => {
+      $("installHelp").hidden = true;
+    };
+  }
+
+  setupInstallCTA();
 }
 
 function renderCats() {
@@ -362,5 +465,6 @@ $("checkoutForm").onsubmit = async e => {
   renderProducts();
   updateCartBadges();
   updateOrdersBadge();
+  setupInstallPrompt();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();

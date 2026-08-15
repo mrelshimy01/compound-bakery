@@ -10,7 +10,7 @@ Mobile-first bakery ordering app for Moharam Basha residents.
 - Active Orders icon in the header
 - Active order list
 - Cancel order before 10 PM
-- PWA install support
+- PWA install support with Android/iOS install CTA and device-specific instructions
 - Demo mode
 - Google Apps Script backend for Products, Orders, OrderItems and Customers
 - Server-side 10 PM cancellation check when live
