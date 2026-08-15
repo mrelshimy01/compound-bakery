@@ -27,6 +27,75 @@ const $ = id => document.getElementById(id);
 
 
 /* =========================================================
+   PHONE NUMBER
+========================================================= */
+
+/*
+ * MoharamBake ALWAYS uses Egyptian LOCAL format.
+ *
+ * +201275122774   -> 01275122774
+ * 00201275122774  -> 01275122774
+ * 201275122774    -> 01275122774
+ * 01275122774     -> 01275122774
+ * 1275122774      -> 01275122774
+ */
+function normalizePhone(phone) {
+  if (phone === null || phone === undefined) {
+    return "";
+  }
+
+  let value = String(phone).trim();
+
+  value = value.replace(/[^\d+]/g, "");
+  value = value.replace(/^\+/, "");
+  value = value.replace(/\.0$/, "");
+
+  if (value.startsWith("0020")) {
+    value = "0" + value.substring(4);
+  } else if (value.startsWith("002")) {
+    value = "0" + value.substring(3);
+  } else if (
+    value.startsWith("20") &&
+    value.length === 12
+  ) {
+    value = "0" + value.substring(2);
+  }
+
+  value = value.replace(/\D/g, "");
+
+  if (
+    value.length === 10 &&
+    value.startsWith("1")
+  ) {
+    value = "0" + value;
+  }
+
+  if (
+    value.startsWith("20") &&
+    value.length === 12
+  ) {
+    value = "0" + value.substring(2);
+  }
+
+  return value;
+}
+
+
+/*
+ * Normalize customer information before storing it.
+ */
+function normalizeCustomer(data) {
+  if (!data) return null;
+
+  return {
+    name: String(data.name || "").trim(),
+    phone: normalizePhone(data.phone || ""),
+    address: String(data.address || "").trim()
+  };
+}
+
+
+/* =========================================================
    BASIC HELPERS
 ========================================================= */
 
@@ -36,7 +105,7 @@ function money(value) {
   return `${n
     .toFixed(2)
     .replace(/\.00$/, "")
-    .replace(/(\.\d)0$/, "$1")} EGP`;
+    .replace(/(\.\d)0$/, "")} EGP`;
 }
 
 function esc(value) {
@@ -65,7 +134,9 @@ function toast(message) {
 function show(screenId) {
   document
     .querySelectorAll(".screen")
-    .forEach(screen => screen.classList.remove("active"));
+    .forEach(screen =>
+      screen.classList.remove("active")
+    );
 
   const target = $(screenId);
 
@@ -97,6 +168,10 @@ function saveCart() {
 }
 
 function saveCustomer() {
+  if (customer) {
+    customer = normalizeCustomer(customer);
+  }
+
   localStorage.setItem(
     "mb_customer",
     JSON.stringify(customer)
@@ -113,13 +188,33 @@ function saveOrders() {
 }
 
 
+/*
+ * Clean old local customer data once.
+ */
+function normalizeStoredCustomer() {
+  if (!customer) return;
+
+  const normalized =
+    normalizeCustomer(customer);
+
+  if (
+    JSON.stringify(normalized) !==
+    JSON.stringify(customer)
+  ) {
+    customer = normalized;
+    saveCustomer();
+  }
+}
+
+
 /* =========================================================
    BADGES
 ========================================================= */
 
 function updateCartBadges() {
   const count = cart.reduce(
-    (total, item) => total + Number(item.qty || 0),
+    (total, item) =>
+      total + Number(item.qty || 0),
     0
   );
 
@@ -135,7 +230,8 @@ function updateCartBadges() {
 function updateOrdersBadge() {
   const count = activeOrders.filter(
     order =>
-      String(order.status).toLowerCase() === "active"
+      String(order.status).toLowerCase() ===
+      "active"
   ).length;
 
   if ($("ordersBadge")) {
@@ -145,7 +241,7 @@ function updateOrdersBadge() {
 
 
 /* =========================================================
-   CANCELLATION RULE
+   CANCELLATION
 ========================================================= */
 
 function isCancellationOpen() {
@@ -164,7 +260,9 @@ function isCancellationOpen() {
 
 function isIOS() {
   return (
-    /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    /iphone|ipad|ipod/i.test(
+      navigator.userAgent
+    ) ||
     (
       navigator.platform === "MacIntel" &&
       navigator.maxTouchPoints > 1
@@ -173,12 +271,16 @@ function isIOS() {
 }
 
 function isAndroid() {
-  return /android/i.test(navigator.userAgent);
+  return /android/i.test(
+    navigator.userAgent
+  );
 }
 
 function isStandalone() {
   return (
-    window.matchMedia("(display-mode: standalone)").matches ||
+    window.matchMedia(
+      "(display-mode: standalone)"
+    ).matches ||
     window.navigator.standalone === true
   );
 }
@@ -197,7 +299,8 @@ function setupInstallCTA() {
 
   if (isIOS()) {
     if (title) {
-      title.textContent = "Install MoharamBake";
+      title.textContent =
+        "Install MoharamBake";
     }
 
     if (hint) {
@@ -206,7 +309,8 @@ function setupInstallCTA() {
     }
   } else if (isAndroid()) {
     if (title) {
-      title.textContent = "Install MoharamBake";
+      title.textContent =
+        "Install MoharamBake";
     }
 
     if (hint) {
@@ -223,6 +327,7 @@ function setupInstallCTA() {
   button.onclick = async () => {
 
     if (deferredInstallPrompt) {
+
       deferredInstallPrompt.prompt();
 
       const result =
@@ -234,14 +339,18 @@ function setupInstallCTA() {
         result &&
         result.outcome === "accepted"
       ) {
-        button.classList.add("installed");
+        button.classList.add(
+          "installed"
+        );
       }
 
       return;
     }
 
     if (isIOS()) {
-      const modal = $("iosInstallModal");
+
+      const modal =
+        $("iosInstallModal");
 
       if (modal) {
         modal.hidden = false;
@@ -276,16 +385,22 @@ function setupInstallPrompt() {
 
       deferredInstallPrompt = null;
 
-      const button = $("installAppBtn");
+      const button =
+        $("installAppBtn");
 
       if (button) {
-        button.classList.add("installed");
+        button.classList.add(
+          "installed"
+        );
       }
     }
   );
 
-  const close = $("closeInstallModal");
-  const done = $("iosDone");
+  const close =
+    $("closeInstallModal");
+
+  const done =
+    $("iosDone");
 
   if (close) {
     close.onclick = () => {
@@ -314,9 +429,11 @@ async function loadProducts() {
     !CONFIG.API_URL
   ) {
     products = [];
+
     renderProductsError(
       "Google Sheets integration is not configured."
     );
+
     return;
   }
 
@@ -332,11 +449,12 @@ async function loadProducts() {
       url
     );
 
-    const response = await fetch(url, {
-      method: "GET",
-      cache: "no-store",
-      redirect: "follow"
-    });
+    const response =
+      await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        redirect: "follow"
+      });
 
     if (!response.ok) {
       throw new Error(
@@ -344,43 +462,51 @@ async function loadProducts() {
       );
     }
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
     console.log(
       "Google Sheets products response:",
       data
     );
 
-    if (!data || data.ok !== true) {
+    if (
+      !data ||
+      data.ok !== true
+    ) {
       throw new Error(
         data?.error ||
         "Google Sheets returned an invalid response."
       );
     }
 
-    if (!Array.isArray(data.products)) {
+    if (
+      !Array.isArray(data.products)
+    ) {
       throw new Error(
         "Products response is not an array."
       );
     }
 
-    products = data.products
-      .map(product => ({
-        id: product.id,
-        name: product.name,
-        category:
-          product.category || "Bakery",
-        price:
-          Number(product.price) || 0,
-        emoji:
-          product.emoji || "🥖",
-        active:
+    products =
+      data.products
+        .map(product => ({
+          id: product.id,
+          name: product.name,
+          category:
+            product.category ||
+            "Bakery",
+          price:
+            Number(product.price) || 0,
+          emoji:
+            product.emoji || "🥖",
+          active:
+            product.active !== false
+        }))
+        .filter(product =>
+          product.name &&
           product.active !== false
-      }))
-      .filter(product =>
-        product.name &&
-        product.active !== false
-      );
+        );
 
     console.log(
       `Loaded ${products.length} products.`,
@@ -417,7 +543,8 @@ async function loadProducts() {
 
 function renderProductsError(message) {
 
-  const container = $("products");
+  const container =
+    $("products");
 
   if (!container) return;
 
@@ -454,23 +581,28 @@ function renderProductsError(message) {
     </div>
   `;
 
-  const button = $("refreshMenuBtn");
+  const button =
+    $("refreshMenuBtn");
 
   if (button) {
-    button.onclick = async () => {
 
-      button.disabled = true;
-      button.textContent = "Loading...";
+    button.onclick =
+      async () => {
 
-      await loadProducts();
+        button.disabled = true;
+        button.textContent =
+          "Loading...";
 
-      if (products.length) {
-        toast("Menu updated.");
-      }
+        await loadProducts();
 
-      button.disabled = false;
-      button.textContent = "Refresh menu";
-    };
+        if (products.length) {
+          toast("Menu updated.");
+        }
+
+        button.disabled = false;
+        button.textContent =
+          "Refresh menu";
+      };
   }
 }
 
@@ -481,7 +613,8 @@ function renderProductsError(message) {
 
 function renderCats() {
 
-  const container = $("cats");
+  const container =
+    $("cats");
 
   if (!container) return;
 
@@ -489,7 +622,9 @@ function renderCats() {
     "All",
     ...new Set(
       products
-        .map(product => product.category)
+        .map(product =>
+          product.category
+        )
         .filter(Boolean)
     )
   ];
@@ -499,7 +634,11 @@ function renderCats() {
       .map(
         (category, index) => `
           <button
-            class="chip ${index === 0 ? "active" : ""}"
+            class="chip ${
+              index === 0
+                ? "active"
+                : ""
+            }"
             data-cat="${esc(category)}"
             type="button"
           >
@@ -518,10 +657,14 @@ function renderCats() {
         container
           .querySelectorAll(".chip")
           .forEach(x =>
-            x.classList.remove("active")
+            x.classList.remove(
+              "active"
+            )
           );
 
-        button.classList.add("active");
+        button.classList.add(
+          "active"
+        );
 
         renderProducts(
           button.dataset.cat
@@ -530,9 +673,12 @@ function renderCats() {
     });
 }
 
-function renderProducts(category = "All") {
+function renderProducts(
+  category = "All"
+) {
 
-  const container = $("products");
+  const container =
+    $("products");
 
   if (!container) return;
 
@@ -541,7 +687,8 @@ function renderProducts(category = "All") {
       ? products
       : products.filter(
           product =>
-            product.category === category
+            product.category ===
+            category
         );
 
   if (!filtered.length) {
@@ -569,7 +716,8 @@ function renderProducts(category = "All") {
 
             <div class="meta">
               ${esc(
-                product.category || "Bakery"
+                product.category ||
+                "Bakery"
               )}
             </div>
 
@@ -582,7 +730,9 @@ function renderProducts(category = "All") {
               <button
                 class="add"
                 type="button"
-                data-product-id="${esc(product.id)}"
+                data-product-id="${esc(
+                  product.id
+                )}"
               >
                 +
               </button>
@@ -614,25 +764,32 @@ function renderProducts(category = "All") {
 
 function add(id) {
 
-  const product = products.find(
-    item =>
-      String(item.id) === String(id)
-  );
+  const product =
+    products.find(
+      item =>
+        String(item.id) ===
+        String(id)
+    );
 
   if (!product) {
-    toast("Product is unavailable.");
+    toast(
+      "Product is unavailable."
+    );
+
     return;
   }
 
   const existing =
     cart.find(
       item =>
-        String(item.id) === String(id)
+        String(item.id) ===
+        String(id)
     );
 
   if (existing) {
     existing.qty += 1;
   } else {
+
     cart.push({
       id: product.id,
       name: product.name,
@@ -653,7 +810,8 @@ function change(id, delta) {
   const item =
     cart.find(
       x =>
-        String(x.id) === String(id)
+        String(x.id) ===
+        String(id)
     );
 
   if (!item) return;
@@ -665,7 +823,8 @@ function change(id, delta) {
     cart =
       cart.filter(
         x =>
-          String(x.id) !== String(id)
+          String(x.id) !==
+          String(id)
       );
   }
 
@@ -676,9 +835,14 @@ function change(id, delta) {
 
 function renderCart() {
 
-  const items = $("cartItems");
-  const totalElement = $("cartTotal");
-  const checkoutButton = $("checkoutBtn");
+  const items =
+    $("cartItems");
+
+  const totalElement =
+    $("cartTotal");
+
+  const checkoutButton =
+    $("checkoutBtn");
 
   if (!items) return;
 
@@ -751,12 +915,17 @@ function renderCart() {
           button.dataset.id;
 
         const delta =
-          button.dataset.action === "plus"
+          button.dataset.action ===
+          "plus"
             ? 1
             : -1;
 
-        button.onclick = () =>
-          change(id, delta);
+        button.onclick =
+          () =>
+            change(
+              id,
+              delta
+            );
       });
   }
 
@@ -775,7 +944,9 @@ function renderCart() {
       cart.length === 0;
 
     checkoutButton.style.opacity =
-      cart.length ? "1" : ".5";
+      cart.length
+        ? "1"
+        : ".5";
   }
 }
 
@@ -783,19 +954,25 @@ function openCart() {
 
   renderCart();
 
-  const drawer = $("drawer");
+  const drawer =
+    $("drawer");
 
   if (drawer) {
-    drawer.classList.add("open");
+    drawer.classList.add(
+      "open"
+    );
   }
 }
 
 function closeCart() {
 
-  const drawer = $("drawer");
+  const drawer =
+    $("drawer");
 
   if (drawer) {
-    drawer.classList.remove("open");
+    drawer.classList.remove(
+      "open"
+    );
   }
 }
 
@@ -806,7 +983,8 @@ function closeCart() {
 
 function renderCheckout() {
 
-  const summary = $("summary");
+  const summary =
+    $("summary");
 
   if (!summary) return;
 
@@ -846,7 +1024,8 @@ function renderCheckout() {
       </div>
     `;
 
-  const slots = $("slots");
+  const slots =
+    $("slots");
 
   if (slots) {
 
@@ -924,23 +1103,40 @@ async function createOrder() {
     toast(
       "Please select a delivery slot."
     );
+
     return;
   }
 
   const name =
     $("name")?.value.trim();
 
+  /*
+   * IMPORTANT:
+   * Normalize immediately when user submits.
+   */
   const phone =
-    $("phone")?.value.trim();
+    normalizePhone(
+      $("phone")?.value.trim()
+    );
 
   const address =
     $("address")?.value.trim();
 
   if (!name || !phone || !address) {
+
     toast(
       "Please complete your delivery details."
     );
+
     return;
+  }
+
+  /*
+   * Also update the visible input to the
+   * canonical local format.
+   */
+  if ($("phone")) {
+    $("phone").value = phone;
   }
 
   const submitButton =
@@ -954,23 +1150,46 @@ async function createOrder() {
       "Placing order...";
   }
 
+  const normalizedCustomer = {
+    name,
+    phone,
+    address
+  };
+
   const orderData = {
-    action: "createOrder",
 
-    customer: {
-      name,
-      phone,
-      address
-    },
+    action:
+      "createOrder",
 
-    slot: selectedSlot,
+    customer:
+      normalizedCustomer,
+
+    /*
+     * Also send top-level values so the backend
+     * remains compatible with both formats.
+     */
+    name,
+    phone,
+    address,
+
+    slot:
+      selectedSlot,
+
+    deliverySlot:
+      selectedSlot,
 
     items:
       cart.map(item => ({
         id: item.id,
+        productId: item.id,
         name: item.name,
-        price: Number(item.price),
-        qty: Number(item.qty)
+        product: item.name,
+        price:
+          Number(item.price),
+        qty:
+          Number(item.qty),
+        quantity:
+          Number(item.qty)
       }))
   };
 
@@ -988,7 +1207,9 @@ async function createOrder() {
           },
 
           body:
-            JSON.stringify(orderData)
+            JSON.stringify(
+              orderData
+            )
         }
       );
 
@@ -1013,26 +1234,38 @@ async function createOrder() {
       );
     }
 
-    customer = {
-      name,
-      phone,
-      address
-    };
+    customer =
+      normalizedCustomer;
 
     saveCustomer();
 
     lastOrder = {
-      orderId: result.orderId,
-      total: result.total,
-      slot: selectedSlot,
-      status: "Active",
+
+      orderId:
+        result.orderId,
+
+      total:
+        result.total,
+
+      slot:
+        selectedSlot,
+
+      status:
+        "Active",
+
+      phone:
+        phone,
 
       items:
         cart.map(item => ({
-          id: item.id,
-          name: item.name,
-          qty: item.qty,
-          price: item.price
+          id:
+            item.id,
+          name:
+            item.name,
+          qty:
+            item.qty,
+          price:
+            item.price
         }))
     };
 
@@ -1043,11 +1276,21 @@ async function createOrder() {
     saveOrders();
 
     cart = [];
+
     saveCart();
 
     renderSuccess();
 
     show("success");
+
+    /*
+     * Give the backend a moment to finish
+     * writing to Sheets, then sync.
+     */
+    setTimeout(
+      syncCustomerOrders,
+      1500
+    );
 
   } catch (error) {
 
@@ -1064,7 +1307,10 @@ async function createOrder() {
   } finally {
 
     if (submitButton) {
-      submitButton.disabled = false;
+
+      submitButton.disabled =
+        false;
+
       submitButton.textContent =
         "Place order";
     }
@@ -1084,7 +1330,9 @@ function renderSuccess() {
 
     $("orderRef").innerHTML = `
       <strong>
-        Order ${esc(lastOrder.orderId)}
+        Order ${esc(
+          lastOrder.orderId
+        )}
       </strong>
       <br>
       ${money(lastOrder.total)}
@@ -1116,16 +1364,17 @@ function renderSuccess() {
         : "none";
 
     cancelButton.onclick =
-      () => cancelActiveOrder(
-        lastOrder.orderId,
-        true
-      );
+      () =>
+        cancelActiveOrder(
+          lastOrder.orderId,
+          true
+        );
   }
 }
 
 
 /* =========================================================
-   ORDERS
+   ACTIVE ORDERS
 ========================================================= */
 
 async function syncCustomerOrders() {
@@ -1141,12 +1390,24 @@ async function syncCustomerOrders() {
     !customer ||
     !customer.phone
   ) {
+
     console.warn(
       "Order sync skipped: no customer phone."
     );
 
     return;
   }
+
+  /*
+   * Normalize the stored phone before
+   * every server request.
+   */
+  customer.phone =
+    normalizePhone(
+      customer.phone
+    );
+
+  saveCustomer();
 
   try {
 
@@ -1160,16 +1421,19 @@ async function syncCustomerOrders() {
       Date.now();
 
     console.log(
-      "Syncing orders for phone:",
+      "Syncing orders for normalized phone:",
       customer.phone
     );
 
     const response =
-      await fetch(url, {
-        method: "GET",
-        cache: "no-store",
-        redirect: "follow"
-      });
+      await fetch(
+        url,
+        {
+          method: "GET",
+          cache: "no-store",
+          redirect: "follow"
+        }
+      );
 
     if (!response.ok) {
       throw new Error(
@@ -1198,27 +1462,36 @@ async function syncCustomerOrders() {
         : [];
 
     /*
-     * IMPORTANT:
-     *
-     * Never wipe locally-known active orders just
-     * because Google Sheets temporarily returned zero.
+     * Normalize every server order.
      */
+    serverOrders.forEach(
+      order => {
 
+        if (order.phone) {
+          order.phone =
+            normalizePhone(
+              order.phone
+            );
+        }
+      }
+    );
+
+    /*
+     * Merge server orders with local orders.
+     *
+     * This prevents a temporary API response of []
+     * from making a newly created order disappear.
+     */
     if (serverOrders.length > 0) {
 
       const mergedOrders = [
         ...serverOrders
       ];
 
-      /*
-       * Keep locally-created active orders that
-       * the server has not returned yet.
-       */
-
       activeOrders.forEach(
         localOrder => {
 
-          const alreadyExists =
+          const exists =
             mergedOrders.some(
               serverOrder =>
                 String(
@@ -1230,10 +1503,13 @@ async function syncCustomerOrders() {
             );
 
           if (
-            !alreadyExists &&
-            String(localOrder.status)
-              .toLowerCase() === "active"
+            !exists &&
+            String(
+              localOrder.status
+            ).toLowerCase() ===
+            "active"
           ) {
+
             mergedOrders.push(
               localOrder
             );
@@ -1246,9 +1522,11 @@ async function syncCustomerOrders() {
 
     } else {
 
+      /*
+       * Do NOT wipe locally-created orders.
+       */
       console.warn(
-        "Orders API returned zero orders. Keeping local active orders.",
-        activeOrders
+        "Orders API returned zero orders. Keeping local active orders."
       );
     }
 
@@ -1263,19 +1541,17 @@ async function syncCustomerOrders() {
       error
     );
 
-    /*
-     * Keep local orders if the API is temporarily
-     * unavailable.
-     */
-
     renderOrders();
   }
 }
 
 function renderOrders() {
 
-  const list = $("ordersList");
-  const empty = $("noOrders");
+  const list =
+    $("ordersList");
+
+  const empty =
+    $("noOrders");
 
   if (!list) return;
 
@@ -1283,7 +1559,8 @@ function renderOrders() {
     activeOrders.filter(
       order =>
         String(order.status)
-          .toLowerCase() === "active"
+          .toLowerCase() ===
+        "active"
     );
 
   updateOrdersBadge();
@@ -1316,15 +1593,29 @@ function renderOrders() {
                 <div class="order-item">
 
                   <span>
-                    ${Number(item.qty)}
+                    ${Number(
+                      item.qty ??
+                      item.quantity ??
+                      1
+                    )}
                     ×
-                    ${esc(item.name)}
+                    ${esc(
+                      item.name ||
+                      item.product ||
+                      ""
+                    )}
                   </span>
 
                   <span>
                     ${money(
-                      Number(item.qty) *
-                      Number(item.price)
+                      Number(
+                        item.qty ??
+                        item.quantity ??
+                        1
+                      ) *
+                      Number(
+                        item.price
+                      )
                     )}
                   </span>
 
@@ -1344,13 +1635,21 @@ function renderOrders() {
               <div>
 
                 <div class="order-number">
-                  ${esc(order.orderId)}
+                  ${esc(
+                    order.orderId
+                  )}
                 </div>
 
                 <div class="order-date">
-                  ${order.date
-                    ? formatDate(order.date)
-                    : "Order"}
+                  ${
+                    order.createdAt ||
+                    order.date
+                      ? formatDate(
+                          order.createdAt ||
+                          order.date
+                        )
+                      : "Order"
+                  }
                 </div>
 
               </div>
@@ -1368,7 +1667,9 @@ function renderOrders() {
               <span>Total</span>
 
               <span>
-                ${money(order.total)}
+                ${money(
+                  order.total
+                )}
               </span>
 
             </div>
@@ -1376,7 +1677,11 @@ function renderOrders() {
             <div class="order-delivery">
               🚚 Tomorrow ·
               <strong>
-                ${esc(order.slot)}
+                ${esc(
+                  order.deliverySlot ||
+                  order.slot ||
+                  ""
+                )}
               </strong>
             </div>
 
@@ -1412,10 +1717,11 @@ function renderOrders() {
     )
     .forEach(button => {
 
-      button.onclick = () =>
-        cancelActiveOrder(
-          button.dataset.orderId
-        );
+      button.onclick =
+        () =>
+          cancelActiveOrder(
+            button.dataset.orderId
+          );
     });
 }
 
@@ -1428,9 +1734,11 @@ function formatDate(value) {
   const date =
     new Date(value);
 
-  if (Number.isNaN(
-    date.getTime()
-  )) {
+  if (
+    Number.isNaN(
+      date.getTime()
+    )
+  ) {
     return String(value);
   }
 
@@ -1475,7 +1783,9 @@ async function cancelActiveOrder(
 
   if (!order) {
 
-    toast("Order not found.");
+    toast(
+      "Order not found."
+    );
 
     return;
   }
@@ -1504,14 +1814,21 @@ async function cancelActiveOrder(
 
           body:
             JSON.stringify({
+
               action:
                 "cancelOrder",
 
               orderId:
                 order.orderId,
 
+              /*
+               * ALWAYS send local format.
+               */
               phone:
-                customer?.phone || ""
+                normalizePhone(
+                  customer?.phone ||
+                  ""
+                )
             })
         }
       );
@@ -1539,8 +1856,10 @@ async function cancelActiveOrder(
 
     if (
       lastOrder &&
-      String(lastOrder.orderId) ===
-        String(orderId)
+      String(
+        lastOrder.orderId
+      ) ===
+      String(orderId)
     ) {
       lastOrder.status =
         "Cancelled";
@@ -1592,9 +1911,11 @@ function setupNavigation() {
     $("homeLogoBtn");
 
   if (logo) {
-    logo.onclick = () => {
-      show("home");
-    };
+
+    logo.onclick =
+      () => {
+        show("home");
+      };
   }
 
   const start =
@@ -1602,39 +1923,40 @@ function setupNavigation() {
 
   if (start) {
 
-    start.onclick = async () => {
+    start.onclick =
+      async () => {
 
-      show("menu");
+        show("menu");
 
-      if (!products.length) {
+        if (!products.length) {
 
-        $("products").innerHTML = `
-          <div
-            class="card"
-            style="
-              grid-column:1/-1;
-              text-align:center;
-              padding:30px;
-            "
-          >
-            <div style="font-size:38px">
-              🥖
+          $("products").innerHTML = `
+            <div
+              class="card"
+              style="
+                grid-column:1/-1;
+                text-align:center;
+                padding:30px;
+              "
+            >
+              <div style="font-size:38px">
+                🥖
+              </div>
+
+              <h3>
+                Loading tomorrow's menu...
+              </h3>
             </div>
+          `;
 
-            <h3>
-              Loading tomorrow's menu...
-            </h3>
-          </div>
-        `;
+          await loadProducts();
 
-        await loadProducts();
+        } else {
 
-      } else {
-
-        renderCats();
-        renderProducts();
-      }
-    };
+          renderCats();
+          renderProducts();
+        }
+      };
   }
 
   const cartButton =
@@ -1676,22 +1998,27 @@ function setupNavigation() {
 
   if (checkout) {
 
-    checkout.onclick = () => {
+    checkout.onclick =
+      () => {
 
-      if (!cart.length) {
-        toast("Your cart is empty.");
-        return;
-      }
+        if (!cart.length) {
 
-      closeCart();
+          toast(
+            "Your cart is empty."
+          );
 
-      selectedSlot =
-        selectedSlot || "";
+          return;
+        }
 
-      renderCheckout();
+        closeCart();
 
-      show("checkout");
-    };
+        selectedSlot =
+          selectedSlot || "";
+
+        renderCheckout();
+
+        show("checkout");
+      };
   }
 
   const back =
@@ -1699,13 +2026,14 @@ function setupNavigation() {
 
   if (back) {
 
-    back.onclick = () => {
+    back.onclick =
+      () => {
 
-      show("menu");
+        show("menu");
 
-      renderCats();
-      renderProducts();
-    };
+        renderCats();
+        renderProducts();
+      };
   }
 
   const ordersButton =
@@ -1729,10 +2057,11 @@ function setupNavigation() {
 
   if (ordersBack) {
 
-    ordersBack.onclick = () => {
+    ordersBack.onclick =
+      () => {
 
-      show("home");
-    };
+        show("home");
+      };
   }
 
   const orderEmpty =
@@ -1759,17 +2088,18 @@ function setupNavigation() {
 
   if (again) {
 
-    again.onclick = async () => {
+    again.onclick =
+      async () => {
 
-      show("menu");
+        show("menu");
 
-      if (!products.length) {
-        await loadProducts();
-      }
+        if (!products.length) {
+          await loadProducts();
+        }
 
-      renderCats();
-      renderProducts();
-    };
+        renderCats();
+        renderProducts();
+      };
   }
 
   const viewOrders =
@@ -1823,6 +2153,11 @@ async function init() {
     "MoharamBake app starting..."
   );
 
+  /*
+   * Clean old stored phone format.
+   */
+  normalizeStoredCustomer();
+
   updateCartBadges();
   updateOrdersBadge();
 
@@ -1832,6 +2167,17 @@ async function init() {
 
   renderCart();
   renderOrders();
+
+  /*
+   * If an existing customer is stored,
+   * sync their orders on startup.
+   */
+  if (
+    customer &&
+    customer.phone
+  ) {
+    syncCustomerOrders();
+  }
 
   console.log(
     "MoharamBake ready."
@@ -1844,7 +2190,8 @@ async function init() {
 ========================================================= */
 
 if (
-  document.readyState === "loading"
+  document.readyState ===
+  "loading"
 ) {
 
   document.addEventListener(
