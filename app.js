@@ -1,7 +1,9 @@
 const CONFIG = {
-  // Paste the deployed Google Apps Script /exec URL here.
-  API_URL: "https://script.google.com/macros/s/AKfycbx2Vkfpsnk-wtYUMF9aky7PySvinXXvWcWweRJVhoeFiGWG5thyoVL6H1elqHAnEq3Eww/exec",
+  API_URL:
+    "https://script.google.com/macros/s/AKfycbx2Vkfpsnk-wtYUMF9aky7PySvinXXvWcWweRJVhoeFiGWG5thyoVL6H1elqHAnEq3Eww/exec",
+
   DEMO_MODE: false,
+
   DELIVERY_SLOTS: [
     "8:00–10:00 AM",
     "10:00 AM–12:00 PM",
@@ -10,522 +12,1794 @@ const CONFIG = {
   ]
 };
 
-const fallbackProducts = [
-  {id:1,name:"Baladi Bread",category:"Bread",price:3,emoji:"🥖",active:true},
-  {id:2,name:"Brown Bread",category:"Bread",price:5,emoji:"🍞",active:true},
-  {id:3,name:"Fino",category:"Bread",price:4,emoji:"🥖",active:true},
-  {id:4,name:"Croissant",category:"Pastries",price:25,emoji:"🥐",active:true}
-];
-
 let products = [];
 let cart = JSON.parse(localStorage.getItem("mb_cart") || "[]");
 let customer = JSON.parse(localStorage.getItem("mb_customer") || "null");
-let activeOrders = JSON.parse(localStorage.getItem("mb_active_orders") || "[]");
+let activeOrders = JSON.parse(
+  localStorage.getItem("mb_active_orders") || "[]"
+);
+
 let selectedSlot = "";
+let lastOrder = null;
 let deferredInstallPrompt = null;
 
 const $ = id => document.getElementById(id);
 
-function money(n) {
-  return `${Number(n).toFixed(2).replace(/\.00$/, "")} EGP`;
+
+/* =========================================================
+   BASIC HELPERS
+========================================================= */
+
+function money(value) {
+  const n = Number(value) || 0;
+
+  return `${n
+    .toFixed(2)
+    .replace(/\.00$/, "")
+    .replace(/(\.\d)0$/, "$1")} EGP`;
 }
 
-function esc(s) {
-  return String(s).replace(/[&<>"']/g, c => ({
-    "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
-  })[c]);
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, char => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[char]);
 }
 
-function toast(t) {
-  $("toast").textContent = t;
-  $("toast").classList.add("show");
-  setTimeout(() => $("toast").classList.remove("show"), 2200);
+function toast(message) {
+  const el = $("toast");
+
+  if (!el) return;
+
+  el.textContent = message;
+  el.classList.add("show");
+
+  setTimeout(() => {
+    el.classList.remove("show");
+  }, 2500);
 }
 
-function show(id) {
-  document.querySelectorAll(".screen").forEach(x => x.classList.remove("active"));
-  $(id).classList.add("active");
-  window.scrollTo(0, 0);
+function show(screenId) {
+  document
+    .querySelectorAll(".screen")
+    .forEach(screen => screen.classList.remove("active"));
+
+  const target = $(screenId);
+
+  if (!target) {
+    console.warn("Screen not found:", screenId);
+    return;
+  }
+
+  target.classList.add("active");
+
+  window.scrollTo({
+    top: 0,
+    behavior: "instant"
+  });
 }
+
+
+/* =========================================================
+   LOCAL STORAGE
+========================================================= */
 
 function saveCart() {
-  localStorage.setItem("mb_cart", JSON.stringify(cart));
+  localStorage.setItem(
+    "mb_cart",
+    JSON.stringify(cart)
+  );
+
   updateCartBadges();
 }
 
+function saveCustomer() {
+  localStorage.setItem(
+    "mb_customer",
+    JSON.stringify(customer)
+  );
+}
+
 function saveOrders() {
-  localStorage.setItem("mb_active_orders", JSON.stringify(activeOrders));
+  localStorage.setItem(
+    "mb_active_orders",
+    JSON.stringify(activeOrders)
+  );
+
   updateOrdersBadge();
 }
 
+
+/* =========================================================
+   BADGES
+========================================================= */
+
 function updateCartBadges() {
-  const n = cart.reduce((s,x) => s + Number(x.qty), 0);
-  $("cartBadge").textContent = n;
-  $("menuBadge").textContent = n;
+  const count = cart.reduce(
+    (total, item) => total + Number(item.qty || 0),
+    0
+  );
+
+  if ($("cartBadge")) {
+    $("cartBadge").textContent = count;
+  }
+
+  if ($("menuBadge")) {
+    $("menuBadge").textContent = count;
+  }
 }
 
 function updateOrdersBadge() {
-  const n = activeOrders.filter(o => o.status === "Active").length;
-  $("ordersBadge").textContent = n;
+  const count = activeOrders.filter(
+    order =>
+      String(order.status).toLowerCase() === "active"
+  ).length;
+
+  if ($("ordersBadge")) {
+    $("ordersBadge").textContent = count;
+  }
 }
+
+
+/* =========================================================
+   CANCELLATION RULE
+========================================================= */
 
 function isCancellationOpen() {
   const now = new Date();
-  const cutoff = new Date();
-  cutoff.setHours(22,0,0,0);
+
+  const cutoff = new Date(now);
+  cutoff.setHours(22, 0, 0, 0);
+
   return now < cutoff;
 }
 
 
-/* =========================
-   DIRECT APP INSTALL
-========================= */
-function isIOS(){
-  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
-    (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
-}
-function isAndroid(){ return /android/i.test(navigator.userAgent); }
-function isStandalone(){
-  return window.matchMedia("(display-mode: standalone)").matches ||
-    window.navigator.standalone===true;
-}
-function setupInstallCTA(){
-  const btn=$("installAppBtn"), hint=$("installHint"), title=$("installTitle");
-  if(!btn)return;
-  if(isStandalone()){btn.classList.add("installed");return;}
-  if(isIOS()){title.textContent="Install MoharamBake";hint.textContent="Add it to your iPhone Home Screen";}
-  else if(isAndroid()){title.textContent="Install MoharamBake";hint.textContent="Install the app on your Android phone";}
-  else{hint.textContent="Install the app on your phone";}
-  btn.onclick=async()=>{
-    if(deferredInstallPrompt){
-      deferredInstallPrompt.prompt();
-      const result=await deferredInstallPrompt.userChoice;
-      deferredInstallPrompt=null;
-      if(result&&result.outcome==="accepted")btn.classList.add("installed");
-      return;
-    }
-    if(isIOS()){$("iosInstallModal").hidden=false;return;}
-    toast("Open your browser menu and choose Install app.");
-  };
-}
-function setupInstallPrompt(){
-  window.addEventListener("beforeinstallprompt",event=>{
-    event.preventDefault();deferredInstallPrompt=event;setupInstallCTA();
-  });
-  window.addEventListener("appinstalled",()=>{
-    deferredInstallPrompt=null;
-    const btn=$("installAppBtn");if(btn)btn.classList.add("installed");
-  });
-  const close=$("closeInstallModal"),done=$("iosDone");
-  if(close)close.onclick=()=>$("iosInstallModal").hidden=true;
-  if(done)done.onclick=()=>$("iosInstallModal").hidden=true;
-  setupInstallCTA();
+/* =========================================================
+   INSTALL APP
+========================================================= */
+
+function isIOS() {
+  return (
+    /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (
+      navigator.platform === "MacIntel" &&
+      navigator.maxTouchPoints > 1
+    )
+  );
 }
 
-function renderCats() {
-  const cats = ["All", ...new Set(products.map(p => p.category).filter(Boolean))];
-  $("cats").innerHTML = cats.map((c,i) =>
-    `<button class="chip ${i===0?"active":""}" data-cat="${esc(c)}">${esc(c)}</button>`
-  ).join("");
-
-  document.querySelectorAll(".chip").forEach(b => {
-    b.onclick = () => {
-      document.querySelectorAll(".chip").forEach(x => x.classList.remove("active"));
-      b.classList.add("active");
-      renderProducts(b.dataset.cat);
-    };
-  });
+function isAndroid() {
+  return /android/i.test(navigator.userAgent);
 }
 
-function renderProducts(cat="All") {
-  const list = cat === "All" ? products : products.filter(p => p.category === cat);
-  const visibleProducts = list.filter(p => p.active !== false);
+function isStandalone() {
+  return (
+    window.matchMedia("(display-mode: standalone)").matches ||
+    window.navigator.standalone === true
+  );
+}
 
-  if (!visibleProducts.length) {
-    $("products").innerHTML = `
-      <div class="card" style="grid-column:1/-1;text-align:center;padding:30px 18px">
-        <div style="font-size:38px">🥖</div>
-        <h3>Menu is being prepared</h3>
-        <p style="color:#8c7d72;font-size:13px">
-          Please try again in a moment.
-        </p>
-        <button class="primary" onclick="loadProducts().then(()=>{renderCats();renderProducts();})">
-          Refresh menu
-        </button>
-      </div>`;
+function setupInstallCTA() {
+  const button = $("installAppBtn");
+  const hint = $("installHint");
+  const title = $("installTitle");
+
+  if (!button) return;
+
+  if (isStandalone()) {
+    button.classList.add("installed");
     return;
   }
 
-  $("products").innerHTML = visibleProducts.map(p => `
-    <article class="product">
-      <div class="emoji">${p.emoji || "🥖"}</div>
-      <h3>${esc(p.name)}</h3>
-      <div class="meta">${esc(p.category || "Bakery")}</div>
-      <div class="bottom">
-        <span class="price">${money(p.price)}</span>
-        <button class="add" onclick="add(${Number(p.id)})">+</button>
-      </div>
-    </article>
-  `).join("");
+  if (isIOS()) {
+    if (title) {
+      title.textContent = "Install MoharamBake";
+    }
+
+    if (hint) {
+      hint.textContent =
+        "Add it to your iPhone Home Screen";
+    }
+  } else if (isAndroid()) {
+    if (title) {
+      title.textContent = "Install MoharamBake";
+    }
+
+    if (hint) {
+      hint.textContent =
+        "Install the app on your Android phone";
+    }
+  } else {
+    if (hint) {
+      hint.textContent =
+        "Install the app on your phone";
+    }
+  }
+
+  button.onclick = async () => {
+
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+
+      const result =
+        await deferredInstallPrompt.userChoice;
+
+      deferredInstallPrompt = null;
+
+      if (
+        result &&
+        result.outcome === "accepted"
+      ) {
+        button.classList.add("installed");
+      }
+
+      return;
+    }
+
+    if (isIOS()) {
+      const modal = $("iosInstallModal");
+
+      if (modal) {
+        modal.hidden = false;
+      }
+
+      return;
+    }
+
+    toast(
+      "Open your browser menu and choose Install app."
+    );
+  };
 }
+
+function setupInstallPrompt() {
+
+  window.addEventListener(
+    "beforeinstallprompt",
+    event => {
+
+      event.preventDefault();
+
+      deferredInstallPrompt = event;
+
+      setupInstallCTA();
+    }
+  );
+
+  window.addEventListener(
+    "appinstalled",
+    () => {
+
+      deferredInstallPrompt = null;
+
+      const button = $("installAppBtn");
+
+      if (button) {
+        button.classList.add("installed");
+      }
+    }
+  );
+
+  const close = $("closeInstallModal");
+  const done = $("iosDone");
+
+  if (close) {
+    close.onclick = () => {
+      $("iosInstallModal").hidden = true;
+    };
+  }
+
+  if (done) {
+    done.onclick = () => {
+      $("iosInstallModal").hidden = true;
+    };
+  }
+
+  setupInstallCTA();
+}
+
+
+/* =========================================================
+   PRODUCTS
+========================================================= */
+
+async function loadProducts() {
+
+  if (
+    CONFIG.DEMO_MODE ||
+    !CONFIG.API_URL
+  ) {
+    products = [];
+    renderProductsError(
+      "Google Sheets integration is not configured."
+    );
+    return;
+  }
+
+  try {
+
+    const url =
+      CONFIG.API_URL +
+      "?action=products&_=" +
+      Date.now();
+
+    console.log(
+      "Loading products from:",
+      url
+    );
+
+    const response = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      redirect: "follow"
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `Google Apps Script returned HTTP ${response.status}`
+      );
+    }
+
+    const data = await response.json();
+
+    console.log(
+      "Google Sheets products response:",
+      data
+    );
+
+    if (!data || data.ok !== true) {
+      throw new Error(
+        data?.error ||
+        "Google Sheets returned an invalid response."
+      );
+    }
+
+    if (!Array.isArray(data.products)) {
+      throw new Error(
+        "Products response is not an array."
+      );
+    }
+
+    products = data.products
+      .map(product => ({
+        id: product.id,
+        name: product.name,
+        category:
+          product.category || "Bakery",
+        price:
+          Number(product.price) || 0,
+        emoji:
+          product.emoji || "🥖",
+        active:
+          product.active !== false
+      }))
+      .filter(product =>
+        product.name &&
+        product.active !== false
+      );
+
+    console.log(
+      `Loaded ${products.length} products.`,
+      products
+    );
+
+    renderCats();
+    renderProducts();
+
+    if (!products.length) {
+      renderProductsError(
+        "No active products were found in Google Sheets."
+      );
+    }
+
+    return products;
+
+  } catch (error) {
+
+    console.error(
+      "Google Sheets products error:",
+      error
+    );
+
+    products = [];
+
+    renderProductsError(
+      "We couldn't load the menu from Google Sheets."
+    );
+
+    return [];
+  }
+}
+
+function renderProductsError(message) {
+
+  const container = $("products");
+
+  if (!container) return;
+
+  container.innerHTML = `
+    <div
+      class="card"
+      style="
+        grid-column:1/-1;
+        text-align:center;
+        padding:30px 18px;
+      "
+    >
+      <div style="font-size:42px">🥖</div>
+
+      <h3>Menu unavailable</h3>
+
+      <p
+        style="
+          color:#8c7d72;
+          font-size:13px;
+          line-height:1.5;
+        "
+      >
+        ${esc(message)}
+      </p>
+
+      <button
+        class="primary"
+        id="refreshMenuBtn"
+        type="button"
+      >
+        Refresh menu
+      </button>
+    </div>
+  `;
+
+  const button = $("refreshMenuBtn");
+
+  if (button) {
+    button.onclick = async () => {
+
+      button.disabled = true;
+      button.textContent = "Loading...";
+
+      await loadProducts();
+
+      if (products.length) {
+        toast("Menu updated.");
+      }
+
+      button.disabled = false;
+      button.textContent = "Refresh menu";
+    };
+  }
+}
+
+
+/* =========================================================
+   CATEGORIES
+========================================================= */
+
+function renderCats() {
+
+  const container = $("cats");
+
+  if (!container) return;
+
+  const categories = [
+    "All",
+    ...new Set(
+      products
+        .map(product => product.category)
+        .filter(Boolean)
+    )
+  ];
+
+  container.innerHTML =
+    categories
+      .map(
+        (category, index) => `
+          <button
+            class="chip ${index === 0 ? "active" : ""}"
+            data-cat="${esc(category)}"
+            type="button"
+          >
+            ${esc(category)}
+          </button>
+        `
+      )
+      .join("");
+
+  container
+    .querySelectorAll(".chip")
+    .forEach(button => {
+
+      button.onclick = () => {
+
+        container
+          .querySelectorAll(".chip")
+          .forEach(x =>
+            x.classList.remove("active")
+          );
+
+        button.classList.add("active");
+
+        renderProducts(
+          button.dataset.cat
+        );
+      };
+    });
+}
+
+function renderProducts(category = "All") {
+
+  const container = $("products");
+
+  if (!container) return;
+
+  const filtered =
+    category === "All"
+      ? products
+      : products.filter(
+          product =>
+            product.category === category
+        );
+
+  if (!filtered.length) {
+
+    renderProductsError(
+      "There are no products in this category."
+    );
+
+    return;
+  }
+
+  container.innerHTML =
+    filtered
+      .map(
+        product => `
+          <article class="product">
+
+            <div class="emoji">
+              ${esc(product.emoji)}
+            </div>
+
+            <h3>
+              ${esc(product.name)}
+            </h3>
+
+            <div class="meta">
+              ${esc(
+                product.category || "Bakery"
+              )}
+            </div>
+
+            <div class="bottom">
+
+              <span class="price">
+                ${money(product.price)}
+              </span>
+
+              <button
+                class="add"
+                type="button"
+                data-product-id="${esc(product.id)}"
+              >
+                +
+              </button>
+
+            </div>
+
+          </article>
+        `
+      )
+      .join("");
+
+  container
+    .querySelectorAll(".add")
+    .forEach(button => {
+
+      button.onclick = () => {
+
+        add(
+          button.dataset.productId
+        );
+      };
+    });
+}
+
+
+/* =========================================================
+   CART
+========================================================= */
 
 function add(id) {
-  const p = products.find(x => Number(x.id) === Number(id));
-  if (!p) return;
-  const x = cart.find(x => Number(x.id) === Number(id));
-  if (x) x.qty++;
-  else cart.push({id:p.id,name:p.name,price:Number(p.price),qty:1});
+
+  const product = products.find(
+    item =>
+      String(item.id) === String(id)
+  );
+
+  if (!product) {
+    toast("Product is unavailable.");
+    return;
+  }
+
+  const existing =
+    cart.find(
+      item =>
+        String(item.id) === String(id)
+    );
+
+  if (existing) {
+    existing.qty += 1;
+  } else {
+    cart.push({
+      id: product.id,
+      name: product.name,
+      price: Number(product.price),
+      qty: 1
+    });
+  }
+
   saveCart();
-  toast(`${p.name} added`);
+
+  toast(
+    `${product.name} added`
+  );
 }
 
-function change(id,d) {
-  const x = cart.find(x => Number(x.id) === Number(id));
-  if (!x) return;
-  x.qty += d;
-  if (x.qty <= 0) cart = cart.filter(y => Number(y.id) !== Number(id));
+function change(id, delta) {
+
+  const item =
+    cart.find(
+      x =>
+        String(x.id) === String(id)
+    );
+
+  if (!item) return;
+
+  item.qty += delta;
+
+  if (item.qty <= 0) {
+
+    cart =
+      cart.filter(
+        x =>
+          String(x.id) !== String(id)
+      );
+  }
+
   saveCart();
+
   renderCart();
 }
 
 function renderCart() {
-  const total = cart.reduce((s,x) => s + x.price*x.qty, 0);
-  $("cartItems").innerHTML = cart.length ? cart.map(x => `
-    <div class="cart-line">
-      <div class="info"><strong>${esc(x.name)}</strong><div>${money(x.price)}</div></div>
-      <div class="qty">
-        <button onclick="change(${Number(x.id)},-1)">−</button>
-        <b>${x.qty}</b>
-        <button onclick="change(${Number(x.id)},1)">+</button>
+
+  const items = $("cartItems");
+  const totalElement = $("cartTotal");
+  const checkoutButton = $("checkoutBtn");
+
+  if (!items) return;
+
+  const total =
+    cart.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.price) *
+        Number(item.qty),
+      0
+    );
+
+  if (!cart.length) {
+
+    items.innerHTML =
+      "<p>Your cart is empty.</p>";
+
+  } else {
+
+    items.innerHTML =
+      cart
+        .map(
+          item => `
+            <div class="cart-line">
+
+              <div class="info">
+                <strong>
+                  ${esc(item.name)}
+                </strong>
+
+                <div>
+                  ${money(item.price)}
+                </div>
+              </div>
+
+              <div class="qty">
+
+                <button
+                  type="button"
+                  data-action="minus"
+                  data-id="${esc(item.id)}"
+                >
+                  −
+                </button>
+
+                <b>
+                  ${item.qty}
+                </b>
+
+                <button
+                  type="button"
+                  data-action="plus"
+                  data-id="${esc(item.id)}"
+                >
+                  +
+                </button>
+
+              </div>
+
+            </div>
+          `
+        )
+        .join("");
+
+    items
+      .querySelectorAll("button")
+      .forEach(button => {
+
+        const id =
+          button.dataset.id;
+
+        const delta =
+          button.dataset.action === "plus"
+            ? 1
+            : -1;
+
+        button.onclick = () =>
+          change(id, delta);
+      });
+  }
+
+  if (totalElement) {
+
+    totalElement.innerHTML = `
+      <div class="cart-total">
+        Total ${money(total)}
       </div>
-    </div>
-  `).join("") : "<p>Your cart is empty.</p>";
-  $("cartTotal").innerHTML = `<div class="cart-total">Total ${money(total)}</div>`;
-  $("checkoutBtn").disabled = !cart.length;
-  $("checkoutBtn").style.opacity = cart.length ? 1 : .5;
+    `;
+  }
+
+  if (checkoutButton) {
+
+    checkoutButton.disabled =
+      cart.length === 0;
+
+    checkoutButton.style.opacity =
+      cart.length ? "1" : ".5";
+  }
 }
 
 function openCart() {
+
   renderCart();
-  $("drawer").classList.add("open");
+
+  const drawer = $("drawer");
+
+  if (drawer) {
+    drawer.classList.add("open");
+  }
 }
 
 function closeCart() {
-  $("drawer").classList.remove("open");
-}
 
-function renderCheckout() {
-  const total = cart.reduce((s,x) => s + x.price*x.qty, 0);
-  $("summary").innerHTML =
-    cart.map(x => `<div class="summary-row"><span>${x.qty} × ${esc(x.name)}</span><span>${money(x.qty*x.price)}</span></div>`).join("") +
-    `<div class="summary-row"><span>Total</span><span>${money(total)}</span></div>`;
+  const drawer = $("drawer");
 
-  $("slots").innerHTML = CONFIG.DELIVERY_SLOTS.map(s => `
-    <button type="button" class="slot ${selectedSlot===s?"selected":""}" data-slot="${esc(s)}">
-      <strong>${esc(s)}</strong><small>Tomorrow</small>
-    </button>
-  `).join("");
-
-  document.querySelectorAll(".slot").forEach(b => {
-    b.onclick = () => { selectedSlot = b.dataset.slot; renderCheckout(); };
-  });
-
-  if (customer) {
-    $("name").value = customer.name || "";
-    $("phone").value = customer.phone || "";
-    $("address").value = customer.address || "";
+  if (drawer) {
+    drawer.classList.remove("open");
   }
 }
 
 
-async function syncCustomerOrders() {
-  if (CONFIG.DEMO_MODE || !CONFIG.API_URL || CONFIG.API_URL.includes("PASTE_")) {
+/* =========================================================
+   CHECKOUT
+========================================================= */
+
+function renderCheckout() {
+
+  const summary = $("summary");
+
+  if (!summary) return;
+
+  const total =
+    cart.reduce(
+      (sum, item) =>
+        sum +
+        Number(item.price) *
+        Number(item.qty),
+      0
+    );
+
+  summary.innerHTML =
+    cart
+      .map(
+        item => `
+          <div class="summary-row">
+            <span>
+              ${item.qty} ×
+              ${esc(item.name)}
+            </span>
+
+            <span>
+              ${money(
+                item.qty *
+                item.price
+              )}
+            </span>
+          </div>
+        `
+      )
+      .join("") +
+    `
+      <div class="summary-row">
+        <span>Total</span>
+        <span>${money(total)}</span>
+      </div>
+    `;
+
+  const slots = $("slots");
+
+  if (slots) {
+
+    slots.innerHTML =
+      CONFIG.DELIVERY_SLOTS
+        .map(
+          slot => `
+            <button
+              type="button"
+              class="slot ${
+                selectedSlot === slot
+                  ? "selected"
+                  : ""
+              }"
+              data-slot="${esc(slot)}"
+            >
+              <strong>
+                ${esc(slot)}
+              </strong>
+
+              <small>
+                Tomorrow
+              </small>
+            </button>
+          `
+        )
+        .join("");
+
+    slots
+      .querySelectorAll(".slot")
+      .forEach(button => {
+
+        button.onclick = () => {
+
+          selectedSlot =
+            button.dataset.slot;
+
+          renderCheckout();
+        };
+      });
+  }
+
+  if (customer) {
+
+    if ($("name")) {
+      $("name").value =
+        customer.name || "";
+    }
+
+    if ($("phone")) {
+      $("phone").value =
+        customer.phone || "";
+    }
+
+    if ($("address")) {
+      $("address").value =
+        customer.address || "";
+    }
+  }
+}
+
+
+/* =========================================================
+   CREATE ORDER
+========================================================= */
+
+async function createOrder() {
+
+  if (!cart.length) {
+    toast("Your cart is empty.");
     return;
   }
 
-  if (!customer || !customer.phone) {
-    activeOrders = [];
+  if (!selectedSlot) {
+    toast(
+      "Please select a delivery slot."
+    );
+    return;
+  }
+
+  const name =
+    $("name")?.value.trim();
+
+  const phone =
+    $("phone")?.value.trim();
+
+  const address =
+    $("address")?.value.trim();
+
+  if (!name || !phone || !address) {
+    toast(
+      "Please complete your delivery details."
+    );
+    return;
+  }
+
+  const submitButton =
+    document.querySelector(
+      '#checkoutForm button[type="submit"]'
+    );
+
+  if (submitButton) {
+    submitButton.disabled = true;
+    submitButton.textContent =
+      "Placing order...";
+  }
+
+  const orderData = {
+    action: "createOrder",
+
+    customer: {
+      name,
+      phone,
+      address
+    },
+
+    slot: selectedSlot,
+
+    items:
+      cart.map(item => ({
+        id: item.id,
+        name: item.name,
+        price: Number(item.price),
+        qty: Number(item.qty)
+      }))
+  };
+
+  try {
+
+    const response =
+      await fetch(
+        CONFIG.API_URL,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "text/plain;charset=utf-8"
+          },
+
+          body:
+            JSON.stringify(orderData)
+        }
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        `Order request failed (${response.status})`
+      );
+    }
+
+    const result =
+      await response.json();
+
+    console.log(
+      "Create order response:",
+      result
+    );
+
+    if (!result.ok) {
+      throw new Error(
+        result.error ||
+        "Unable to place order."
+      );
+    }
+
+    customer = {
+      name,
+      phone,
+      address
+    };
+
+    saveCustomer();
+
+    lastOrder = {
+      orderId: result.orderId,
+      total: result.total,
+      slot: selectedSlot,
+      status: "Active",
+
+      items:
+        cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          qty: item.qty,
+          price: item.price
+        }))
+    };
+
+    activeOrders.unshift(
+      lastOrder
+    );
+
     saveOrders();
+
+    cart = [];
+    saveCart();
+
+    renderSuccess();
+
+    show("success");
+
+  } catch (error) {
+
+    console.error(
+      "Create order error:",
+      error
+    );
+
+    toast(
+      error.message ||
+      "Unable to place order. Please try again."
+    );
+
+  } finally {
+
+    if (submitButton) {
+      submitButton.disabled = false;
+      submitButton.textContent =
+        "Place order";
+    }
+  }
+}
+
+
+/* =========================================================
+   SUCCESS
+========================================================= */
+
+function renderSuccess() {
+
+  if (!lastOrder) return;
+
+  if ($("orderRef")) {
+
+    $("orderRef").innerHTML = `
+      <strong>
+        Order ${esc(lastOrder.orderId)}
+      </strong>
+      <br>
+      ${money(lastOrder.total)}
+    `;
+  }
+
+  if ($("cancelInfo")) {
+
+    if (isCancellationOpen()) {
+
+      $("cancelInfo").textContent =
+        "You can cancel this order before 10:00 PM.";
+
+    } else {
+
+      $("cancelInfo").textContent =
+        "Cancellation is closed after 10:00 PM.";
+    }
+  }
+
+  const cancelButton =
+    $("cancelOrderBtn");
+
+  if (cancelButton) {
+
+    cancelButton.style.display =
+      isCancellationOpen()
+        ? "block"
+        : "none";
+
+    cancelButton.onclick =
+      () => cancelActiveOrder(
+        lastOrder.orderId,
+        true
+      );
+  }
+}
+
+
+/* =========================================================
+   ORDERS
+========================================================= */
+
+async function syncCustomerOrders() {
+
+  if (
+    CONFIG.DEMO_MODE ||
+    !CONFIG.API_URL
+  ) {
+    return;
+  }
+
+  if (
+    !customer ||
+    !customer.phone
+  ) {
+
+    activeOrders = [];
+
+    saveOrders();
+
     return;
   }
 
   try {
+
     const url =
       CONFIG.API_URL +
       "?action=orders&phone=" +
-      encodeURIComponent(customer.phone);
+      encodeURIComponent(
+        customer.phone
+      ) +
+      "&_=" +
+      Date.now();
 
-    const response = await fetch(url, { cache: "no-store" });
-    const result = await response.json();
+    const response =
+      await fetch(url, {
+        method: "GET",
+        cache: "no-store"
+      });
 
-    if (!result.ok) throw new Error(result.error || "Could not load orders");
+    if (!response.ok) {
+      throw new Error(
+        `Orders request failed (${response.status})`
+      );
+    }
 
-    activeOrders = (result.orders || []).map(order => ({
-      ...order,
-      status: order.status || "Active",
-      items: order.items || []
-    }));
+    const result =
+      await response.json();
+
+    if (!result.ok) {
+      throw new Error(
+        result.error ||
+        "Unable to load orders."
+      );
+    }
+
+    activeOrders =
+      Array.isArray(result.orders)
+        ? result.orders
+        : [];
 
     saveOrders();
+
     renderOrders();
+
   } catch (error) {
-    console.warn("Order sync failed:", error);
+
+    console.warn(
+      "Order sync failed:",
+      error
+    );
+
+    renderOrders();
   }
 }
 
 function renderOrders() {
+
   const list = $("ordersList");
-  const active = activeOrders.filter(o => String(o.status).toLowerCase() === "active");
+  const empty = $("noOrders");
+
+  if (!list) return;
+
+  const active =
+    activeOrders.filter(
+      order =>
+        String(order.status)
+          .toLowerCase() === "active"
+    );
+
   updateOrdersBadge();
 
   if (!active.length) {
+
     list.innerHTML = "";
-    $("noOrders").style.display = "block";
+
+    if (empty) {
+      empty.style.display =
+        "block";
+    }
+
     return;
   }
 
-  $("noOrders").style.display = "none";
+  if (empty) {
+    empty.style.display =
+      "none";
+  }
 
-  list.innerHTML = active.map(order => {
-    const items = (order.items || []).map(item => `
-      <div class="order-item">
-        <span>${Number(item.qty)} × ${esc(item.name)}</span>
-        <span>${money(Number(item.qty)*Number(item.price))}</span>
-      </div>
-    `).join("");
+  list.innerHTML =
+    active
+      .map(order => {
 
-    const cancellation = isCancellationOpen()
-      ? `<button class="cancel-order-button" onclick="cancelActiveOrder('${esc(order.orderId)}')">Cancel order</button>`
-      : `<div class="cancel-closed">🔒 Cancellation closed at 10:00 PM</div>`;
+        const items =
+          (order.items || [])
+            .map(
+              item => `
+                <div class="order-item">
 
-    return `
-      <div class="order-card">
-        <div class="order-card-head">
-          <div>
-            <div class="order-number">${esc(order.orderId)}</div>
-            <div class="order-date">Placed ${esc(order.displayDate || "today")}</div>
+                  <span>
+                    ${Number(item.qty)}
+                    ×
+                    ${esc(item.name)}
+                  </span>
+
+                  <span>
+                    ${money(
+                      Number(item.qty) *
+                      Number(item.price)
+                    )}
+                  </span>
+
+                </div>
+              `
+            )
+            .join("");
+
+        const canCancel =
+          isCancellationOpen();
+
+        return `
+          <div class="order-card">
+
+            <div class="order-card-head">
+
+              <div>
+
+                <div class="order-number">
+                  ${esc(order.orderId)}
+                </div>
+
+                <div class="order-date">
+                  ${order.date
+                    ? formatDate(order.date)
+                    : "Order"}
+                </div>
+
+              </div>
+
+              <div class="order-status">
+                Active
+              </div>
+
+            </div>
+
+            ${items}
+
+            <div class="order-total">
+
+              <span>Total</span>
+
+              <span>
+                ${money(order.total)}
+              </span>
+
+            </div>
+
+            <div class="order-delivery">
+              🚚 Tomorrow ·
+              <strong>
+                ${esc(order.slot)}
+              </strong>
+            </div>
+
+            ${
+              canCancel
+                ? `
+                  <button
+                    class="cancel-order-button"
+                    type="button"
+                    data-order-id="${esc(
+                      order.orderId
+                    )}"
+                  >
+                    Cancel order
+                  </button>
+                `
+                : `
+                  <div class="cancel-closed">
+                    🔒 Cancellation closed
+                    at 10:00 PM
+                  </div>
+                `
+            }
+
           </div>
-          <div class="order-status">Active</div>
-        </div>
-        ${items}
-        <div class="order-total"><span>Total</span><span>${money(order.total)}</span></div>
-        <div class="order-delivery">🚚 Tomorrow · <strong>${esc(order.slot)}</strong></div>
-        ${cancellation}
-      </div>
-    `;
-  }).join("");
+        `;
+      })
+      .join("");
+
+  list
+    .querySelectorAll(
+      ".cancel-order-button"
+    )
+    .forEach(button => {
+
+      button.onclick = () =>
+        cancelActiveOrder(
+          button.dataset.orderId
+        );
+    });
 }
 
-async function cancelActiveOrder(orderId) {
-  const order = activeOrders.find(o => o.orderId === orderId);
-  if (!order) return;
+function formatDate(value) {
+
+  if (!value) {
+    return "";
+  }
+
+  const date =
+    new Date(value);
+
+  if (Number.isNaN(
+    date.getTime()
+  )) {
+    return String(value);
+  }
+
+  return (
+    "Placed " +
+    date.toLocaleDateString(
+      "en-EG",
+      {
+        day: "numeric",
+        month: "short",
+        year: "numeric"
+      }
+    )
+  );
+}
+
+
+/* =========================================================
+   CANCEL ORDER
+========================================================= */
+
+async function cancelActiveOrder(
+  orderId,
+  fromSuccess = false
+) {
 
   if (!isCancellationOpen()) {
-    toast("Orders can only be cancelled before 10 PM.");
-    renderOrders();
+
+    toast(
+      "Orders can only be cancelled before 10 PM."
+    );
+
     return;
   }
 
-  if (!confirm("Are you sure you want to cancel this order?")) return;
+  const order =
+    activeOrders.find(
+      item =>
+        String(item.orderId) ===
+        String(orderId)
+    );
 
-  if (!CONFIG.DEMO_MODE && CONFIG.API_URL && !CONFIG.API_URL.includes("PASTE_")) {
-    try {
-      const response = await fetch(CONFIG.API_URL, {
-        method:"POST",
-        headers:{"Content-Type":"text/plain;charset=utf-8"},
-        body:JSON.stringify({
-          action:"cancelOrder",
-          orderId:order.orderId,
-          phone:customer?.phone || ""
-        })
-      });
-      const result = await response.json();
-      if (!result.ok) throw new Error(result.error || "Could not cancel order");
-    } catch (error) {
-      toast(error.message || "Could not cancel order");
-      return;
-    }
+  if (!order) {
+
+    toast("Order not found.");
+
+    return;
   }
 
-  order.status = "Cancelled";
-  order.cancelledAt = new Date().toISOString();
-  saveOrders();
-  renderOrders();
-  toast("Order cancelled successfully.");
-}
+  const confirmed =
+    window.confirm(
+      "Are you sure you want to cancel this order?"
+    );
 
-
-function googleJsonp(params, timeoutMs = 12000) {
-  return new Promise((resolve, reject) => {
-    const callbackName =
-      "moharamBakeJsonp_" + Date.now() + "_" +
-      Math.random().toString(36).slice(2);
-
-    const script = document.createElement("script");
-    const query = new URLSearchParams({
-      ...params,
-      callback: callbackName,
-      _: Date.now().toString()
-    });
-
-    let finished = false;
-
-    const cleanup = () => {
-      if (script.parentNode) script.parentNode.removeChild(script);
-      try { delete window[callbackName]; } catch (_) {}
-      clearTimeout(timer);
-    };
-
-    const finish = (fn, value) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      fn(value);
-    };
-
-    window[callbackName] = data => finish(resolve, data);
-
-    script.onerror = () =>
-      finish(reject, new Error("Google Apps Script request failed"));
-
-    const timer = setTimeout(() => {
-      finish(reject, new Error("Google Apps Script request timed out"));
-    }, timeoutMs);
-
-    script.src = CONFIG.API_URL + "?" + query.toString();
-    document.head.appendChild(script);
-  });
-}
-
-async function loadProducts() {
-  if (CONFIG.DEMO_MODE || !CONFIG.API_URL || CONFIG.API_URL.includes("PASTE_")) {
-    products = fallbackProducts;
+  if (!confirmed) {
     return;
   }
 
   try {
-    const j = await googleJsonp({ action: "products" });
 
-    if (!j || !j.ok) {
-      throw new Error((j && j.error) || "Google Sheets returned an error");
+    const response =
+      await fetch(
+        CONFIG.API_URL,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type":
+              "text/plain;charset=utf-8"
+          },
+
+          body:
+            JSON.stringify({
+              action:
+                "cancelOrder",
+
+              orderId:
+                order.orderId,
+
+              phone:
+                customer?.phone || ""
+            })
+        }
+      );
+
+    if (!response.ok) {
+      throw new Error(
+        `Cancellation failed (${response.status})`
+      );
     }
 
-    products = Array.isArray(j.products) && j.products.length
-      ? j.products
-      : fallbackProducts;
+    const result =
+      await response.json();
 
-    if (!Array.isArray(j.products) || !j.products.length) {
-      toast("Products sheet is empty — showing starter menu");
+    if (!result.ok) {
+      throw new Error(
+        result.error ||
+        "Unable to cancel order."
+      );
     }
-  } catch (e) {
-    console.warn("Google Sheets products error:", e);
-    products = fallbackProducts;
-    toast("Could not load online menu — showing starter menu");
-  }
-}
 
-async function submitOrder(order) {
-  if (CONFIG.DEMO_MODE || !CONFIG.API_URL || CONFIG.API_URL.includes("PASTE_")) {
-    await new Promise(r => setTimeout(r, 500));
-    return {ok:true,orderId:"MB-DEMO-"+Math.floor(Math.random()*9000+1000)};
-  }
+    order.status =
+      "Cancelled";
 
-  const r = await fetch(CONFIG.API_URL, {
-    method:"POST",
-    headers:{"Content-Type":"text/plain;charset=utf-8"},
-    body:JSON.stringify({action:"createOrder",...order})
-  });
-  return r.json();
-}
-
-$("startBtn").onclick = () => show("menu");
-$("ordersBtn").onclick = async () => {
-  show("orders");
-  renderOrders();
-  await syncCustomerOrders();
-};
-if ($("homeLogoBtn")) $("homeLogoBtn").onclick = () => show("home");
-if ($("ordersBackBtn")) $("ordersBackBtn").onclick = () => show("home");
-$("cartBtn").onclick = openCart;
-$("menuCart").onclick = openCart;
-$("close").onclick = closeCart;
-$("drawer").querySelector(".shade").onclick = closeCart;
-$("checkoutBtn").onclick = () => { closeCart(); renderCheckout(); show("checkout"); };
-$("back").onclick = () => show("menu");
-$("again").onclick = () => show("menu");
-$("viewOrdersAfterSuccess").onclick = () => { renderOrders(); show("orders"); };
-$("orderFromEmpty").onclick = () => show("menu");
-
-$("checkoutForm").onsubmit = async e => {
-  e.preventDefault();
-
-  if (!selectedSlot) { toast("Please choose a delivery slot"); return; }
-  if (!cart.length) { toast("Your cart is empty"); show("menu"); return; }
-
-  const order = {
-    customer:{
-      name:$("name").value.trim(),
-      phone:$("phone").value.trim(),
-      address:$("address").value.trim()
-    },
-    slot:selectedSlot,
-    items:cart.map(x => ({id:x.id,name:x.name,price:x.price,qty:x.qty}))
-  };
-
-  customer = order.customer;
-  localStorage.setItem("mb_customer", JSON.stringify(customer));
-
-  const btn = e.submitter;
-  btn.disabled = true;
-  btn.textContent = "Placing order…";
-
-  try {
-    const result = await submitOrder(order);
-    if (!result.ok) throw new Error(result.error || "Order failed");
-
-    const total = order.items.reduce((sum,item) => sum + Number(item.price)*Number(item.qty), 0);
-
-    const newOrder = {
-      orderId:result.orderId || "Order received",
-      createdAt:new Date().toISOString(),
-      displayDate:new Date().toLocaleString(),
-      status:"Active",
-      customer:order.customer,
-      slot:order.slot,
-      items:order.items,
-      total:total
-    };
-
-    activeOrders.push(newOrder);
     saveOrders();
-    // Refresh from Google Sheets after the backend has accepted the order.
-    await syncCustomerOrders();
 
-    $("orderRef").textContent = newOrder.orderId;
-    $("cancelInfo").textContent = isCancellationOpen()
-      ? "You can cancel this order until 10:00 PM today."
-      : "The cancellation window has closed at 10:00 PM.";
+    if (
+      lastOrder &&
+      String(lastOrder.orderId) ===
+        String(orderId)
+    ) {
+      lastOrder.status =
+        "Cancelled";
+    }
 
-    $("cancelOrderBtn").style.display = isCancellationOpen() ? "block" : "none";
+    if (fromSuccess) {
 
-    cart = [];
-    saveCart();
-    show("success");
-  } catch (err) {
-    toast(err.message || "Could not place order");
-  } finally {
-    btn.disabled = false;
-    btn.textContent = "Place order";
+      if ($("cancelOrderBtn")) {
+        $("cancelOrderBtn").style.display =
+          "none";
+      }
+
+      if ($("cancelInfo")) {
+        $("cancelInfo").textContent =
+          "Your order has been cancelled.";
+      }
+
+    } else {
+
+      renderOrders();
+    }
+
+    toast(
+      "Order cancelled successfully."
+    );
+
+  } catch (error) {
+
+    console.error(
+      "Cancel order error:",
+      error
+    );
+
+    toast(
+      error.message ||
+      "Unable to cancel order."
+    );
   }
-};
+}
 
-(async () => {
-  await loadProducts();
-  renderCats();
-  renderProducts();
+
+/* =========================================================
+   NAVIGATION
+========================================================= */
+
+function setupNavigation() {
+
+  // Logo → Home
+  const logo =
+    $("homeLogoBtn");
+
+  if (logo) {
+    logo.onclick = () => {
+      show("home");
+    };
+  }
+
+  // Start ordering
+  const start =
+    $("startBtn");
+
+  if (start) {
+
+    start.onclick = async () => {
+
+      show("menu");
+
+      if (!products.length) {
+
+        $("products").innerHTML = `
+          <div
+            class="card"
+            style="
+              grid-column:1/-1;
+              text-align:center;
+              padding:30px;
+            "
+          >
+            <div style="font-size:38px">
+              🥖
+            </div>
+
+            <h3>
+              Loading tomorrow's menu...
+            </h3>
+          </div>
+        `;
+
+        await loadProducts();
+      } else {
+
+        renderCats();
+        renderProducts();
+      }
+    };
+  }
+
+  // Cart top button
+  const cartButton =
+    $("cartBtn");
+
+  if (cartButton) {
+    cartButton.onclick =
+      openCart;
+  }
+
+  // Cart button inside menu
+  const menuCart =
+    $("menuCart");
+
+  if (menuCart) {
+    menuCart.onclick =
+      openCart;
+  }
+
+  // Close cart
+  const close =
+    $("close");
+
+  if (close) {
+    close.onclick =
+      closeCart;
+  }
+
+  const shade =
+    document.querySelector(
+      ".drawer .shade"
+    );
+
+  if (shade) {
+    shade.onclick =
+      closeCart;
+  }
+
+  // Checkout
+  const checkout =
+    $("checkoutBtn");
+
+  if (checkout) {
+
+    checkout.onclick = () => {
+
+      if (!cart.length) {
+        toast("Your cart is empty.");
+        return;
+      }
+
+      closeCart();
+
+      selectedSlot =
+        selectedSlot || "";
+
+      renderCheckout();
+
+      show("checkout");
+    };
+  }
+
+  // Back from checkout
+  const back =
+    $("back");
+
+  if (back) {
+
+    back.onclick = () => {
+
+      show("menu");
+
+      renderCats();
+      renderProducts();
+    };
+  }
+
+  // Orders
+  const ordersButton =
+    $("ordersBtn");
+
+  if (ordersButton) {
+
+    ordersButton.onclick =
+      async () => {
+
+        show("orders");
+
+        renderOrders();
+
+        await syncCustomerOrders();
+      };
+  }
+
+  // Back from active orders
+  const ordersBack =
+    $("ordersBackBtn");
+
+  if (ordersBack) {
+
+    ordersBack.onclick = () => {
+
+      show("home");
+    };
+  }
+
+  // Order from empty orders
+  const orderEmpty =
+    $("orderFromEmpty");
+
+  if (orderEmpty) {
+
+    orderEmpty.onclick =
+      async () => {
+
+        show("menu");
+
+        if (!products.length) {
+          await loadProducts();
+        }
+
+        renderCats();
+        renderProducts();
+      };
+  }
+
+  // Order again
+  const again =
+    $("again");
+
+  if (again) {
+
+    again.onclick = async () => {
+
+      show("menu");
+
+      if (!products.length) {
+        await loadProducts();
+      }
+
+      renderCats();
+      renderProducts();
+    };
+  }
+
+  // View orders after success
+  const viewOrders =
+    $("viewOrdersAfterSuccess");
+
+  if (viewOrders) {
+
+    viewOrders.onclick =
+      async () => {
+
+        show("orders");
+
+        renderOrders();
+
+        await syncCustomerOrders();
+      };
+  }
+}
+
+
+/* =========================================================
+   CHECKOUT FORM
+========================================================= */
+
+function setupCheckoutForm() {
+
+  const form =
+    $("checkoutForm");
+
+  if (!form) return;
+
+  form.addEventListener(
+    "submit",
+    async event => {
+
+      event.preventDefault();
+
+      await createOrder();
+    }
+  );
+}
+
+
+/* =========================================================
+   STARTUP
+========================================================= */
+
+async function init() {
+
+  console.log(
+    "MoharamBake app starting..."
+  );
+
   updateCartBadges();
   updateOrdersBadge();
+
+  setupNavigation();
+  setupCheckoutForm();
   setupInstallPrompt();
-  if (customer && customer.phone) syncCustomerOrders();
-  if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
-})();
+
+  renderCart();
+  renderOrders();
+
+  // Don't load Google Sheets until the user
+  // actually enters the menu.
+  //
+  // This prevents unnecessary Apps Script
+  // requests when opening the home page.
+
+  console.log(
+    "MoharamBake ready."
+  );
+}
+
+
+/* =========================================================
+   START APP
+========================================================= */
+
+if (
+  document.readyState === "loading"
+) {
+
+  document.addEventListener(
+    "DOMContentLoaded",
+    init
+  );
+
+} else {
+
+  init();
+}
