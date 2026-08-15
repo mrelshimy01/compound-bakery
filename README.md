@@ -41,3 +41,7 @@ See `google-apps-script/SETUP.md`. The app is configured for live mode but requi
 The frontend is configured to use the deployed Apps Script endpoint.
 
 `https://script.google.com/macros/s/AKfycbzYoty72rrL-5K_VoSNH5hRioyae7BjvEq0Wk68DbVZf7llOo7EOHK2R-OfnBOic6Q14g/exec`
+
+
+## v9 Google Apps Script integration
+GET requests for Products and Orders use JSONP to avoid browser CORS issues with Google Apps Script Web Apps. Redeploy the updated Apps Script as a new Web App version, then deploy the PWA.

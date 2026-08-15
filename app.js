@@ -139,7 +139,24 @@ function renderCats() {
 
 function renderProducts(cat="All") {
   const list = cat === "All" ? products : products.filter(p => p.category === cat);
-  $("products").innerHTML = list.filter(p => p.active !== false).map(p => `
+  const visibleProducts = list.filter(p => p.active !== false);
+
+  if (!visibleProducts.length) {
+    $("products").innerHTML = `
+      <div class="card" style="grid-column:1/-1;text-align:center;padding:30px 18px">
+        <div style="font-size:38px">🥖</div>
+        <h3>Menu is being prepared</h3>
+        <p style="color:#8c7d72;font-size:13px">
+          Please try again in a moment.
+        </p>
+        <button class="primary" onclick="loadProducts().then(()=>{renderCats();renderProducts();})">
+          Refresh menu
+        </button>
+      </div>`;
+    return;
+  }
+
+  $("products").innerHTML = visibleProducts.map(p => `
     <article class="product">
       <div class="emoji">${p.emoji || "🥖"}</div>
       <h3>${esc(p.name)}</h3>
@@ -337,6 +354,49 @@ async function cancelActiveOrder(orderId) {
   toast("Order cancelled successfully.");
 }
 
+
+function googleJsonp(params, timeoutMs = 12000) {
+  return new Promise((resolve, reject) => {
+    const callbackName =
+      "moharamBakeJsonp_" + Date.now() + "_" +
+      Math.random().toString(36).slice(2);
+
+    const script = document.createElement("script");
+    const query = new URLSearchParams({
+      ...params,
+      callback: callbackName,
+      _: Date.now().toString()
+    });
+
+    let finished = false;
+
+    const cleanup = () => {
+      if (script.parentNode) script.parentNode.removeChild(script);
+      try { delete window[callbackName]; } catch (_) {}
+      clearTimeout(timer);
+    };
+
+    const finish = (fn, value) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      fn(value);
+    };
+
+    window[callbackName] = data => finish(resolve, data);
+
+    script.onerror = () =>
+      finish(reject, new Error("Google Apps Script request failed"));
+
+    const timer = setTimeout(() => {
+      finish(reject, new Error("Google Apps Script request timed out"));
+    }, timeoutMs);
+
+    script.src = CONFIG.API_URL + "?" + query.toString();
+    document.head.appendChild(script);
+  });
+}
+
 async function loadProducts() {
   if (CONFIG.DEMO_MODE || !CONFIG.API_URL || CONFIG.API_URL.includes("PASTE_")) {
     products = fallbackProducts;
@@ -344,12 +404,23 @@ async function loadProducts() {
   }
 
   try {
-    const r = await fetch(CONFIG.API_URL + "?action=products", {cache:"no-store"});
-    const j = await r.json();
-    products = j.products || fallbackProducts;
+    const j = await googleJsonp({ action: "products" });
+
+    if (!j || !j.ok) {
+      throw new Error((j && j.error) || "Google Sheets returned an error");
+    }
+
+    products = Array.isArray(j.products) && j.products.length
+      ? j.products
+      : fallbackProducts;
+
+    if (!Array.isArray(j.products) || !j.products.length) {
+      toast("Products sheet is empty — showing starter menu");
+    }
   } catch (e) {
+    console.warn("Google Sheets products error:", e);
     products = fallbackProducts;
-    toast("Using offline menu");
+    toast("Could not load online menu — showing starter menu");
   }
 }
 
