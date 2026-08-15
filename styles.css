@@ -49,3 +49,8 @@ button,input{font:inherit}button{cursor:pointer;border:0}
 .install-modal-icon{width:52px;height:52px;border-radius:15px;background:#f3e5da;display:grid;place-items:center;font-size:26px;margin-bottom:15px}
 .install-modal-card h3{font-size:24px;line-height:1.1;margin:6px 30px 18px 0}.install-modal-close{position:absolute;right:15px;top:12px;background:transparent;font-size:30px;color:#6d5d54}
 .ios-step{display:flex;align-items:center;gap:12px;padding:11px 0;border-top:1px solid #eee6df;font-size:13px}.ios-step b{width:28px;height:28px;border-radius:50%;background:#2c241f;color:#fff;display:grid;place-items:center;flex:0 0 auto}
+
+/* Navigation */
+.brand-button{appearance:none;border:0;margin:0;padding:0;background:transparent;color:inherit;text-align:left;display:flex;align-items:center;gap:10px;cursor:pointer}
+.brand-button:focus-visible{outline:2px solid #b85c38;outline-offset:4px;border-radius:14px}
+.back-button{display:inline-flex;align-items:center;gap:6px;background:#f0e9e3;color:#463b34;border:0;border-radius:11px;padding:9px 12px;margin-bottom:18px;font-size:13px;font-weight:800}

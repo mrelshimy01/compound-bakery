@@ -332,6 +332,8 @@ async function submitOrder(order) {
 
 $("startBtn").onclick = () => show("menu");
 $("ordersBtn").onclick = () => { renderOrders(); show("orders"); };
+$("homeLogoBtn").onclick = () => show("home");
+$("ordersBackBtn").onclick = () => show("home");
 $("cartBtn").onclick = openCart;
 $("menuCart").onclick = openCart;
 $("close").onclick = closeCart;
