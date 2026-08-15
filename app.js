@@ -1,6 +1,7 @@
 const CONFIG = {
+  // Paste the deployed Google Apps Script /exec URL here.
   API_URL: "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE",
-  DEMO_MODE: true,
+  DEMO_MODE: false,
   DELIVERY_SLOTS: [
     "8:00–10:00 AM",
     "10:00 AM–12:00 PM",
@@ -219,9 +220,45 @@ function renderCheckout() {
   }
 }
 
+
+async function syncCustomerOrders() {
+  if (CONFIG.DEMO_MODE || !CONFIG.API_URL || CONFIG.API_URL.includes("PASTE_")) {
+    return;
+  }
+
+  if (!customer || !customer.phone) {
+    activeOrders = [];
+    saveOrders();
+    return;
+  }
+
+  try {
+    const url =
+      CONFIG.API_URL +
+      "?action=orders&phone=" +
+      encodeURIComponent(customer.phone);
+
+    const response = await fetch(url, { cache: "no-store" });
+    const result = await response.json();
+
+    if (!result.ok) throw new Error(result.error || "Could not load orders");
+
+    activeOrders = (result.orders || []).map(order => ({
+      ...order,
+      status: order.status || "Active",
+      items: order.items || []
+    }));
+
+    saveOrders();
+    renderOrders();
+  } catch (error) {
+    console.warn("Order sync failed:", error);
+  }
+}
+
 function renderOrders() {
   const list = $("ordersList");
-  const active = activeOrders.filter(o => o.status === "Active");
+  const active = activeOrders.filter(o => String(o.status).toLowerCase() === "active");
   updateOrdersBadge();
 
   if (!active.length) {
@@ -331,7 +368,11 @@ async function submitOrder(order) {
 }
 
 $("startBtn").onclick = () => show("menu");
-$("ordersBtn").onclick = () => { renderOrders(); show("orders"); };
+$("ordersBtn").onclick = async () => {
+  show("orders");
+  renderOrders();
+  await syncCustomerOrders();
+};
 $("homeLogoBtn").onclick = () => show("home");
 $("ordersBackBtn").onclick = () => show("home");
 $("cartBtn").onclick = openCart;
@@ -386,6 +427,8 @@ $("checkoutForm").onsubmit = async e => {
 
     activeOrders.push(newOrder);
     saveOrders();
+    // Refresh from Google Sheets after the backend has accepted the order.
+    await syncCustomerOrders();
 
     $("orderRef").textContent = newOrder.orderId;
     $("cancelInfo").textContent = isCancellationOpen()
@@ -412,5 +455,6 @@ $("checkoutForm").onsubmit = async e => {
   updateCartBadges();
   updateOrdersBadge();
   setupInstallPrompt();
+  if (customer && customer.phone) syncCustomerOrders();
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(()=>{});
 })();

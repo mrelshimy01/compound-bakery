@@ -31,3 +31,7 @@ The backend uses spreadsheet ID:
 `1y3FMn3N_sq8GqSjlSpyobkoIdAWINkPyAYPTMYVkpjg`
 
 Do not put secrets or access tokens in this frontend repository.
+
+
+## Google Sheets integration
+See `google-apps-script/SETUP.md`. The app is configured for live mode but requires the deployed Apps Script `/exec` URL in `app.js`.
