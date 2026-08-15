@@ -13,11 +13,31 @@ const CONFIG = {
 };
 
 let products = [];
-let cart = JSON.parse(localStorage.getItem("mb_cart") || "[]");
-let customer = JSON.parse(localStorage.getItem("mb_customer") || "null");
-let activeOrders = JSON.parse(
-  localStorage.getItem("mb_active_orders") || "[]"
+
+let cart = JSON.parse(
+  localStorage.getItem("mb_cart") || "[]"
 );
+
+let customer = JSON.parse(
+  localStorage.getItem("mb_customer") || "null"
+);
+
+/*
+ * IMPORTANT:
+ *
+ * Active orders are NOT stored locally.
+ * Google Sheets is the single source of truth.
+ *
+ * Older versions of the app stored active orders
+ * in localStorage. We intentionally do not read them.
+ */
+let activeOrders = [];
+
+/*
+ * Remove any old locally cached orders created
+ * by previous versions of the application.
+ */
+localStorage.removeItem("mb_active_orders");
 
 let selectedSlot = "";
 let lastOrder = null;
@@ -40,41 +60,71 @@ const $ = id => document.getElementById(id);
  * 1275122774      -> 01275122774
  */
 function normalizePhone(phone) {
-  if (phone === null || phone === undefined) {
+
+  if (
+    phone === null ||
+    phone === undefined
+  ) {
     return "";
   }
 
-  let value = String(phone).trim();
+  let value =
+    String(phone).trim();
 
-  value = value.replace(/[^\d+]/g, "");
-  value = value.replace(/^\+/, "");
-  value = value.replace(/\.0$/, "");
+  value =
+    value.replace(/[^\d+]/g, "");
+
+  value =
+    value.replace(/^\+/, "");
+
+  value =
+    value.replace(/\.0$/, "");
 
   if (value.startsWith("0020")) {
-    value = "0" + value.substring(4);
-  } else if (value.startsWith("002")) {
-    value = "0" + value.substring(3);
+
+    value =
+      "0" +
+      value.substring(4);
+
+  } else if (
+    value.startsWith("002")
+  ) {
+
+    value =
+      "0" +
+      value.substring(3);
+
   } else if (
     value.startsWith("20") &&
     value.length === 12
   ) {
-    value = "0" + value.substring(2);
+
+    value =
+      "0" +
+      value.substring(2);
   }
 
-  value = value.replace(/\D/g, "");
+  value =
+    value.replace(/\D/g, "");
 
   if (
     value.length === 10 &&
     value.startsWith("1")
   ) {
-    value = "0" + value;
+
+    value =
+      "0" +
+      value;
   }
 
   if (
     value.startsWith("20") &&
     value.length === 12
   ) {
-    value = "0" + value.substring(2);
+
+    value =
+      "0" +
+      value.substring(2);
   }
 
   return value;
@@ -85,12 +135,27 @@ function normalizePhone(phone) {
  * Normalize customer information before storing it.
  */
 function normalizeCustomer(data) {
-  if (!data) return null;
+
+  if (!data) {
+    return null;
+  }
 
   return {
-    name: String(data.name || "").trim(),
-    phone: normalizePhone(data.phone || ""),
-    address: String(data.address || "").trim()
+
+    name:
+      String(
+        data.name || ""
+      ).trim(),
+
+    phone:
+      normalizePhone(
+        data.phone || ""
+      ),
+
+    address:
+      String(
+        data.address || ""
+      ).trim()
   };
 }
 
@@ -100,7 +165,9 @@ function normalizeCustomer(data) {
 ========================================================= */
 
 function money(value) {
-  const n = Number(value) || 0;
+
+  const n =
+    Number(value) || 0;
 
   return `${n
     .toFixed(2)
@@ -108,44 +175,76 @@ function money(value) {
     .replace(/(\.\d)0$/, "")} EGP`;
 }
 
+
 function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, char => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': "&quot;",
-    "'": "&#39;"
-  })[char]);
+
+  return String(
+    value ?? ""
+  ).replace(
+    /[&<>"']/g,
+    char => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]
+  );
 }
+
 
 function toast(message) {
-  const el = $("toast");
 
-  if (!el) return;
+  const el =
+    $("toast");
 
-  el.textContent = message;
-  el.classList.add("show");
-
-  setTimeout(() => {
-    el.classList.remove("show");
-  }, 2500);
-}
-
-function show(screenId) {
-  document
-    .querySelectorAll(".screen")
-    .forEach(screen =>
-      screen.classList.remove("active")
-    );
-
-  const target = $(screenId);
-
-  if (!target) {
-    console.warn("Screen not found:", screenId);
+  if (!el) {
     return;
   }
 
-  target.classList.add("active");
+  el.textContent =
+    message;
+
+  el.classList.add(
+    "show"
+  );
+
+  setTimeout(() => {
+
+    el.classList.remove(
+      "show"
+    );
+
+  }, 2500);
+}
+
+
+function show(screenId) {
+
+  document
+    .querySelectorAll(".screen")
+    .forEach(screen =>
+      screen.classList.remove(
+        "active"
+      )
+    );
+
+  const target =
+    $(screenId);
+
+  if (!target) {
+
+    console.warn(
+      "Screen not found:",
+      screenId
+    );
+
+    return;
+  }
+
+  target.classList.add(
+    "active"
+  );
 
   window.scrollTo({
     top: 0,
@@ -159,6 +258,7 @@ function show(screenId) {
 ========================================================= */
 
 function saveCart() {
+
   localStorage.setItem(
     "mb_cart",
     JSON.stringify(cart)
@@ -167,22 +267,33 @@ function saveCart() {
   updateCartBadges();
 }
 
+
 function saveCustomer() {
+
   if (customer) {
-    customer = normalizeCustomer(customer);
+
+    customer =
+      normalizeCustomer(
+        customer
+      );
   }
 
   localStorage.setItem(
     "mb_customer",
-    JSON.stringify(customer)
+    JSON.stringify(
+      customer
+    )
   );
 }
 
+
+/*
+ * IMPORTANT:
+ *
+ * Active orders are server-owned.
+ * Never save active orders to localStorage.
+ */
 function saveOrders() {
-  localStorage.setItem(
-    "mb_active_orders",
-    JSON.stringify(activeOrders)
-  );
 
   updateOrdersBadge();
 }
@@ -192,16 +303,28 @@ function saveOrders() {
  * Clean old local customer data once.
  */
 function normalizeStoredCustomer() {
-  if (!customer) return;
+
+  if (!customer) {
+    return;
+  }
 
   const normalized =
-    normalizeCustomer(customer);
+    normalizeCustomer(
+      customer
+    );
 
   if (
-    JSON.stringify(normalized) !==
-    JSON.stringify(customer)
+    JSON.stringify(
+      normalized
+    ) !==
+    JSON.stringify(
+      customer
+    )
   ) {
-    customer = normalized;
+
+    customer =
+      normalized;
+
     saveCustomer();
   }
 }
@@ -212,30 +335,46 @@ function normalizeStoredCustomer() {
 ========================================================= */
 
 function updateCartBadges() {
-  const count = cart.reduce(
-    (total, item) =>
-      total + Number(item.qty || 0),
-    0
-  );
+
+  const count =
+    cart.reduce(
+      (total, item) =>
+        total +
+        Number(
+          item.qty || 0
+        ),
+      0
+    );
 
   if ($("cartBadge")) {
-    $("cartBadge").textContent = count;
+
+    $("cartBadge").textContent =
+      count;
   }
 
   if ($("menuBadge")) {
-    $("menuBadge").textContent = count;
+
+    $("menuBadge").textContent =
+      count;
   }
 }
 
+
 function updateOrdersBadge() {
-  const count = activeOrders.filter(
-    order =>
-      String(order.status).toLowerCase() ===
-      "active"
-  ).length;
+
+  const count =
+    activeOrders.filter(
+      order =>
+        String(
+          order.status
+        ).toLowerCase() ===
+        "active"
+    ).length;
 
   if ($("ordersBadge")) {
-    $("ordersBadge").textContent = count;
+
+    $("ordersBadge").textContent =
+      count;
   }
 }
 
@@ -245,10 +384,19 @@ function updateOrdersBadge() {
 ========================================================= */
 
 function isCancellationOpen() {
-  const now = new Date();
 
-  const cutoff = new Date(now);
-  cutoff.setHours(22, 0, 0, 0);
+  const now =
+    new Date();
+
+  const cutoff =
+    new Date(now);
+
+  cutoff.setHours(
+    22,
+    0,
+    0,
+    0
+  );
 
   return now < cutoff;
 }
@@ -259,111 +407,148 @@ function isCancellationOpen() {
 ========================================================= */
 
 function isIOS() {
+
   return (
     /iphone|ipad|ipod/i.test(
       navigator.userAgent
     ) ||
     (
-      navigator.platform === "MacIntel" &&
+      navigator.platform ===
+        "MacIntel" &&
       navigator.maxTouchPoints > 1
     )
   );
 }
 
+
 function isAndroid() {
+
   return /android/i.test(
     navigator.userAgent
   );
 }
 
+
 function isStandalone() {
+
   return (
     window.matchMedia(
       "(display-mode: standalone)"
     ).matches ||
-    window.navigator.standalone === true
+    window.navigator.standalone ===
+      true
   );
 }
 
-function setupInstallCTA() {
-  const button = $("installAppBtn");
-  const hint = $("installHint");
-  const title = $("installTitle");
 
-  if (!button) return;
+function setupInstallCTA() {
+
+  const button =
+    $("installAppBtn");
+
+  const hint =
+    $("installHint");
+
+  const title =
+    $("installTitle");
+
+  if (!button) {
+    return;
+  }
 
   if (isStandalone()) {
-    button.classList.add("installed");
+
+    button.classList.add(
+      "installed"
+    );
+
     return;
   }
 
   if (isIOS()) {
+
     if (title) {
+
       title.textContent =
         "Install MoharamBake";
     }
 
     if (hint) {
+
       hint.textContent =
         "Add it to your iPhone Home Screen";
     }
+
   } else if (isAndroid()) {
+
     if (title) {
+
       title.textContent =
         "Install MoharamBake";
     }
 
     if (hint) {
+
       hint.textContent =
         "Install the app on your Android phone";
     }
+
   } else {
+
     if (hint) {
+
       hint.textContent =
         "Install the app on your phone";
     }
   }
 
-  button.onclick = async () => {
+  button.onclick =
+    async () => {
 
-    if (deferredInstallPrompt) {
+      if (deferredInstallPrompt) {
 
-      deferredInstallPrompt.prompt();
+        deferredInstallPrompt.prompt();
 
-      const result =
-        await deferredInstallPrompt.userChoice;
+        const result =
+          await deferredInstallPrompt.userChoice;
 
-      deferredInstallPrompt = null;
+        deferredInstallPrompt =
+          null;
 
-      if (
-        result &&
-        result.outcome === "accepted"
-      ) {
-        button.classList.add(
-          "installed"
-        );
+        if (
+          result &&
+          result.outcome ===
+            "accepted"
+        ) {
+
+          button.classList.add(
+            "installed"
+          );
+        }
+
+        return;
       }
 
-      return;
-    }
+      if (isIOS()) {
 
-    if (isIOS()) {
+        const modal =
+          $("iosInstallModal");
 
-      const modal =
-        $("iosInstallModal");
+        if (modal) {
 
-      if (modal) {
-        modal.hidden = false;
+          modal.hidden =
+            false;
+        }
+
+        return;
       }
 
-      return;
-    }
-
-    toast(
-      "Open your browser menu and choose Install app."
-    );
-  };
+      toast(
+        "Open your browser menu and choose Install app."
+      );
+    };
 }
+
 
 function setupInstallPrompt() {
 
@@ -373,7 +558,8 @@ function setupInstallPrompt() {
 
       event.preventDefault();
 
-      deferredInstallPrompt = event;
+      deferredInstallPrompt =
+        event;
 
       setupInstallCTA();
     }
@@ -383,12 +569,14 @@ function setupInstallPrompt() {
     "appinstalled",
     () => {
 
-      deferredInstallPrompt = null;
+      deferredInstallPrompt =
+        null;
 
       const button =
         $("installAppBtn");
 
       if (button) {
+
         button.classList.add(
           "installed"
         );
@@ -403,15 +591,23 @@ function setupInstallPrompt() {
     $("iosDone");
 
   if (close) {
-    close.onclick = () => {
-      $("iosInstallModal").hidden = true;
-    };
+
+    close.onclick =
+      () => {
+
+        $("iosInstallModal").hidden =
+          true;
+      };
   }
 
   if (done) {
-    done.onclick = () => {
-      $("iosInstallModal").hidden = true;
-    };
+
+    done.onclick =
+      () => {
+
+        $("iosInstallModal").hidden =
+          true;
+      };
   }
 
   setupInstallCTA();
@@ -428,6 +624,7 @@ async function loadProducts() {
     CONFIG.DEMO_MODE ||
     !CONFIG.API_URL
   ) {
+
     products = [];
 
     renderProductsError(
@@ -450,13 +647,17 @@ async function loadProducts() {
     );
 
     const response =
-      await fetch(url, {
-        method: "GET",
-        cache: "no-store",
-        redirect: "follow"
-      });
+      await fetch(
+        url,
+        {
+          method: "GET",
+          cache: "no-store",
+          redirect: "follow"
+        }
+      );
 
     if (!response.ok) {
+
       throw new Error(
         `Google Apps Script returned HTTP ${response.status}`
       );
@@ -474,6 +675,7 @@ async function loadProducts() {
       !data ||
       data.ok !== true
     ) {
+
       throw new Error(
         data?.error ||
         "Google Sheets returned an invalid response."
@@ -481,8 +683,11 @@ async function loadProducts() {
     }
 
     if (
-      !Array.isArray(data.products)
+      !Array.isArray(
+        data.products
+      )
     ) {
+
       throw new Error(
         "Products response is not an array."
       );
@@ -491,21 +696,36 @@ async function loadProducts() {
     products =
       data.products
         .map(product => ({
-          id: product.id,
-          name: product.name,
+
+          id:
+            product.id,
+
+          name:
+            product.name,
+
           category:
             product.category ||
             "Bakery",
+
           price:
-            Number(product.price) || 0,
+            Number(
+              product.price
+            ) || 0,
+
           emoji:
-            product.emoji || "🥖",
+            product.emoji ||
+            "🥖",
+
           active:
-            product.active !== false
+            product.active !==
+            false
+
         }))
-        .filter(product =>
-          product.name &&
-          product.active !== false
+        .filter(
+          product =>
+            product.name &&
+            product.active !==
+              false
         );
 
     console.log(
@@ -517,6 +737,7 @@ async function loadProducts() {
     renderProducts();
 
     if (!products.length) {
+
       renderProductsError(
         "No active products were found in Google Sheets."
       );
@@ -541,12 +762,17 @@ async function loadProducts() {
   }
 }
 
-function renderProductsError(message) {
+
+function renderProductsError(
+  message
+) {
 
   const container =
     $("products");
 
-  if (!container) return;
+  if (!container) {
+    return;
+  }
 
   container.innerHTML = `
     <div
@@ -557,9 +783,13 @@ function renderProductsError(message) {
         padding:30px 18px;
       "
     >
-      <div style="font-size:42px">🥖</div>
+      <div style="font-size:42px">
+        🥖
+      </div>
 
-      <h3>Menu unavailable</h3>
+      <h3>
+        Menu unavailable
+      </h3>
 
       <p
         style="
@@ -589,17 +819,26 @@ function renderProductsError(message) {
     button.onclick =
       async () => {
 
-        button.disabled = true;
+        button.disabled =
+          true;
+
         button.textContent =
           "Loading...";
 
         await loadProducts();
 
-        if (products.length) {
-          toast("Menu updated.");
+        if (
+          products.length
+        ) {
+
+          toast(
+            "Menu updated."
+          );
         }
 
-        button.disabled = false;
+        button.disabled =
+          false;
+
         button.textContent =
           "Refresh menu";
       };
@@ -616,14 +855,17 @@ function renderCats() {
   const container =
     $("cats");
 
-  if (!container) return;
+  if (!container) {
+    return;
+  }
 
   const categories = [
     "All",
     ...new Set(
       products
-        .map(product =>
-          product.category
+        .map(
+          product =>
+            product.category
         )
         .filter(Boolean)
     )
@@ -632,46 +874,59 @@ function renderCats() {
   container.innerHTML =
     categories
       .map(
-        (category, index) => `
+        (
+          category,
+          index
+        ) => `
+
           <button
             class="chip ${
               index === 0
                 ? "active"
                 : ""
             }"
-            data-cat="${esc(category)}"
+            data-cat="${esc(
+              category
+            )}"
             type="button"
           >
             ${esc(category)}
           </button>
+
         `
       )
       .join("");
 
   container
-    .querySelectorAll(".chip")
+    .querySelectorAll(
+      ".chip"
+    )
     .forEach(button => {
 
-      button.onclick = () => {
+      button.onclick =
+        () => {
 
-        container
-          .querySelectorAll(".chip")
-          .forEach(x =>
-            x.classList.remove(
-              "active"
+          container
+            .querySelectorAll(
+              ".chip"
             )
+            .forEach(x =>
+              x.classList.remove(
+                "active"
+              )
+            );
+
+          button.classList.add(
+            "active"
           );
 
-        button.classList.add(
-          "active"
-        );
-
-        renderProducts(
-          button.dataset.cat
-        );
-      };
+          renderProducts(
+            button.dataset.cat
+          );
+        };
     });
 }
+
 
 function renderProducts(
   category = "All"
@@ -680,7 +935,9 @@ function renderProducts(
   const container =
     $("products");
 
-  if (!container) return;
+  if (!container) {
+    return;
+  }
 
   const filtered =
     category === "All"
@@ -704,14 +961,19 @@ function renderProducts(
     filtered
       .map(
         product => `
+
           <article class="product">
 
             <div class="emoji">
-              ${esc(product.emoji)}
+              ${esc(
+                product.emoji
+              )}
             </div>
 
             <h3>
-              ${esc(product.name)}
+              ${esc(
+                product.name
+              )}
             </h3>
 
             <div class="meta">
@@ -724,7 +986,9 @@ function renderProducts(
             <div class="bottom">
 
               <span class="price">
-                ${money(product.price)}
+                ${money(
+                  product.price
+                )}
               </span>
 
               <button
@@ -740,20 +1004,25 @@ function renderProducts(
             </div>
 
           </article>
+
         `
       )
       .join("");
 
   container
-    .querySelectorAll(".add")
+    .querySelectorAll(
+      ".add"
+    )
     .forEach(button => {
 
-      button.onclick = () => {
+      button.onclick =
+        () => {
 
-        add(
-          button.dataset.productId
-        );
-      };
+          add(
+            button.dataset
+              .productId
+          );
+        };
     });
 }
 
@@ -772,6 +1041,7 @@ function add(id) {
     );
 
   if (!product) {
+
     toast(
       "Product is unavailable."
     );
@@ -787,14 +1057,27 @@ function add(id) {
     );
 
   if (existing) {
-    existing.qty += 1;
+
+    existing.qty +=
+      1;
+
   } else {
 
     cart.push({
-      id: product.id,
-      name: product.name,
-      price: Number(product.price),
-      qty: 1
+
+      id:
+        product.id,
+
+      name:
+        product.name,
+
+      price:
+        Number(
+          product.price
+        ),
+
+      qty:
+        1
     });
   }
 
@@ -805,7 +1088,11 @@ function add(id) {
   );
 }
 
-function change(id, delta) {
+
+function change(
+  id,
+  delta
+) {
 
   const item =
     cart.find(
@@ -814,11 +1101,16 @@ function change(id, delta) {
         String(id)
     );
 
-  if (!item) return;
+  if (!item) {
+    return;
+  }
 
-  item.qty += delta;
+  item.qty +=
+    delta;
 
-  if (item.qty <= 0) {
+  if (
+    item.qty <= 0
+  ) {
 
     cart =
       cart.filter(
@@ -833,6 +1125,7 @@ function change(id, delta) {
   renderCart();
 }
 
+
 function renderCart() {
 
   const items =
@@ -844,14 +1137,20 @@ function renderCart() {
   const checkoutButton =
     $("checkoutBtn");
 
-  if (!items) return;
+  if (!items) {
+    return;
+  }
 
   const total =
     cart.reduce(
       (sum, item) =>
         sum +
-        Number(item.price) *
-        Number(item.qty),
+        Number(
+          item.price
+        ) *
+        Number(
+          item.qty
+        ),
       0
     );
 
@@ -866,16 +1165,23 @@ function renderCart() {
       cart
         .map(
           item => `
+
             <div class="cart-line">
 
               <div class="info">
+
                 <strong>
-                  ${esc(item.name)}
+                  ${esc(
+                    item.name
+                  )}
                 </strong>
 
                 <div>
-                  ${money(item.price)}
+                  ${money(
+                    item.price
+                  )}
                 </div>
+
               </div>
 
               <div class="qty">
@@ -883,7 +1189,9 @@ function renderCart() {
                 <button
                   type="button"
                   data-action="minus"
-                  data-id="${esc(item.id)}"
+                  data-id="${esc(
+                    item.id
+                  )}"
                 >
                   −
                 </button>
@@ -895,7 +1203,9 @@ function renderCart() {
                 <button
                   type="button"
                   data-action="plus"
-                  data-id="${esc(item.id)}"
+                  data-id="${esc(
+                    item.id
+                  )}"
                 >
                   +
                 </button>
@@ -903,12 +1213,15 @@ function renderCart() {
               </div>
 
             </div>
+
           `
         )
         .join("");
 
     items
-      .querySelectorAll("button")
+      .querySelectorAll(
+        "button"
+      )
       .forEach(button => {
 
         const id =
@@ -941,7 +1254,8 @@ function renderCart() {
   if (checkoutButton) {
 
     checkoutButton.disabled =
-      cart.length === 0;
+      cart.length ===
+      0;
 
     checkoutButton.style.opacity =
       cart.length
@@ -949,6 +1263,7 @@ function renderCart() {
         : ".5";
   }
 }
+
 
 function openCart() {
 
@@ -958,11 +1273,13 @@ function openCart() {
     $("drawer");
 
   if (drawer) {
+
     drawer.classList.add(
       "open"
     );
   }
 }
+
 
 function closeCart() {
 
@@ -970,6 +1287,7 @@ function closeCart() {
     $("drawer");
 
   if (drawer) {
+
     drawer.classList.remove(
       "open"
     );
@@ -986,14 +1304,20 @@ function renderCheckout() {
   const summary =
     $("summary");
 
-  if (!summary) return;
+  if (!summary) {
+    return;
+  }
 
   const total =
     cart.reduce(
       (sum, item) =>
         sum +
-        Number(item.price) *
-        Number(item.qty),
+        Number(
+          item.price
+        ) *
+        Number(
+          item.qty
+        ),
       0
     );
 
@@ -1001,10 +1325,14 @@ function renderCheckout() {
     cart
       .map(
         item => `
+
           <div class="summary-row">
+
             <span>
               ${item.qty} ×
-              ${esc(item.name)}
+              ${esc(
+                item.name
+              )}
             </span>
 
             <span>
@@ -1013,15 +1341,27 @@ function renderCheckout() {
                 item.price
               )}
             </span>
+
           </div>
+
         `
       )
       .join("") +
+
     `
+
       <div class="summary-row">
-        <span>Total</span>
-        <span>${money(total)}</span>
+
+        <span>
+          Total
+        </span>
+
+        <span>
+          ${money(total)}
+        </span>
+
       </div>
+
     `;
 
   const slots =
@@ -1033,15 +1373,20 @@ function renderCheckout() {
       CONFIG.DELIVERY_SLOTS
         .map(
           slot => `
+
             <button
               type="button"
               class="slot ${
-                selectedSlot === slot
+                selectedSlot ===
+                slot
                   ? "selected"
                   : ""
               }"
-              data-slot="${esc(slot)}"
+              data-slot="${esc(
+                slot
+              )}"
             >
+
               <strong>
                 ${esc(slot)}
               </strong>
@@ -1049,40 +1394,51 @@ function renderCheckout() {
               <small>
                 Tomorrow
               </small>
+
             </button>
+
           `
         )
         .join("");
 
     slots
-      .querySelectorAll(".slot")
+      .querySelectorAll(
+        ".slot"
+      )
       .forEach(button => {
 
-        button.onclick = () => {
+        button.onclick =
+          () => {
 
-          selectedSlot =
-            button.dataset.slot;
+            selectedSlot =
+              button.dataset.slot;
 
-          renderCheckout();
-        };
+            renderCheckout();
+          };
       });
   }
 
   if (customer) {
 
     if ($("name")) {
+
       $("name").value =
-        customer.name || "";
+        customer.name ||
+        "";
     }
 
     if ($("phone")) {
+
       $("phone").value =
-        customer.phone || "";
+        customer.phone ||
+        "";
     }
 
     if ($("address")) {
+
       $("address").value =
-        customer.address || "";
+        customer.address ||
+        "";
     }
   }
 }
@@ -1095,11 +1451,16 @@ function renderCheckout() {
 async function createOrder() {
 
   if (!cart.length) {
-    toast("Your cart is empty.");
+
+    toast(
+      "Your cart is empty."
+    );
+
     return;
   }
 
   if (!selectedSlot) {
+
     toast(
       "Please select a delivery slot."
     );
@@ -1122,7 +1483,11 @@ async function createOrder() {
   const address =
     $("address")?.value.trim();
 
-  if (!name || !phone || !address) {
+  if (
+    !name ||
+    !phone ||
+    !address
+  ) {
 
     toast(
       "Please complete your delivery details."
@@ -1136,7 +1501,9 @@ async function createOrder() {
    * canonical local format.
    */
   if ($("phone")) {
-    $("phone").value = phone;
+
+    $("phone").value =
+      phone;
   }
 
   const submitButton =
@@ -1145,12 +1512,16 @@ async function createOrder() {
     );
 
   if (submitButton) {
-    submitButton.disabled = true;
+
+    submitButton.disabled =
+      true;
+
     submitButton.textContent =
       "Placing order...";
   }
 
   const normalizedCustomer = {
+
     name,
     phone,
     address
@@ -1180,16 +1551,33 @@ async function createOrder() {
 
     items:
       cart.map(item => ({
-        id: item.id,
-        productId: item.id,
-        name: item.name,
-        product: item.name,
+
+        id:
+          item.id,
+
+        productId:
+          item.id,
+
+        name:
+          item.name,
+
+        product:
+          item.name,
+
         price:
-          Number(item.price),
+          Number(
+            item.price
+          ),
+
         qty:
-          Number(item.qty),
+          Number(
+            item.qty
+          ),
+
         quantity:
-          Number(item.qty)
+          Number(
+            item.qty
+          )
       }))
   };
 
@@ -1214,6 +1602,7 @@ async function createOrder() {
       );
 
     if (!response.ok) {
+
       throw new Error(
         `Order request failed (${response.status})`
       );
@@ -1228,6 +1617,7 @@ async function createOrder() {
     );
 
     if (!result.ok) {
+
       throw new Error(
         result.error ||
         "Unable to place order."
@@ -1258,34 +1648,50 @@ async function createOrder() {
 
       items:
         cart.map(item => ({
+
           id:
             item.id,
+
           name:
             item.name,
+
           qty:
             item.qty,
+
           price:
             item.price
         }))
     };
 
-    activeOrders.unshift(
-      lastOrder
-    );
+    /*
+     * IMPORTANT:
+     *
+     * Do NOT add the order to local activeOrders.
+     * Google Sheets is the source of truth.
+     */
 
-    saveOrders();
+    activeOrders = [];
 
+    /*
+     * Clear the cart immediately.
+     */
     cart = [];
 
     saveCart();
 
+    /*
+     * Render the success page immediately.
+     */
     renderSuccess();
 
     show("success");
 
     /*
-     * Give the backend a moment to finish
-     * writing to Sheets, then sync.
+     * Now retrieve the actual order from Google Sheets.
+     * We do NOT use localStorage as a fallback.
+     *
+     * The backend may need a moment to finish writing,
+     * so wait briefly before syncing.
      */
     setTimeout(
       syncCustomerOrders,
@@ -1324,24 +1730,34 @@ async function createOrder() {
 
 function renderSuccess() {
 
-  if (!lastOrder) return;
+  if (!lastOrder) {
+    return;
+  }
 
   if ($("orderRef")) {
 
     $("orderRef").innerHTML = `
+
       <strong>
         Order ${esc(
           lastOrder.orderId
         )}
       </strong>
+
       <br>
-      ${money(lastOrder.total)}
+
+      ${money(
+        lastOrder.total
+      )}
+
     `;
   }
 
   if ($("cancelInfo")) {
 
-    if (isCancellationOpen()) {
+    if (
+      isCancellationOpen()
+    ) {
 
       $("cancelInfo").textContent =
         "You can cancel this order before 10:00 PM.";
@@ -1383,6 +1799,7 @@ async function syncCustomerOrders() {
     CONFIG.DEMO_MODE ||
     !CONFIG.API_URL
   ) {
+
     return;
   }
 
@@ -1394,6 +1811,13 @@ async function syncCustomerOrders() {
     console.warn(
       "Order sync skipped: no customer phone."
     );
+
+    /*
+     * No customer = no server orders.
+     */
+    activeOrders = [];
+
+    renderOrders();
 
     return;
   }
@@ -1436,6 +1860,7 @@ async function syncCustomerOrders() {
       );
 
     if (!response.ok) {
+
       throw new Error(
         `Orders request failed (${response.status})`
       );
@@ -1450,6 +1875,7 @@ async function syncCustomerOrders() {
     );
 
     if (!result.ok) {
+
       throw new Error(
         result.error ||
         "Unable to load orders."
@@ -1457,7 +1883,9 @@ async function syncCustomerOrders() {
     }
 
     const serverOrders =
-      Array.isArray(result.orders)
+      Array.isArray(
+        result.orders
+      )
         ? result.orders
         : [];
 
@@ -1468,6 +1896,7 @@ async function syncCustomerOrders() {
       order => {
 
         if (order.phone) {
+
           order.phone =
             normalizePhone(
               order.phone
@@ -1477,59 +1906,39 @@ async function syncCustomerOrders() {
     );
 
     /*
-     * Merge server orders with local orders.
+     * =====================================================
+     * GOOGLE SHEETS IS THE SINGLE SOURCE OF TRUTH
+     * =====================================================
      *
-     * This prevents a temporary API response of []
-     * from making a newly created order disappear.
+     * NEVER merge server orders with local orders.
+     *
+     * If Google Sheets returns:
+     *
+     *   [order1, order2]
+     *
+     * the app shows:
+     *
+     *   order1, order2
+     *
+     * If Google Sheets returns:
+     *
+     *   []
+     *
+     * the app shows:
+     *
+     *   ZERO ORDERS
+     *
+     * This means deleting an order from Google Sheets
+     * will remove it from the app on the next sync.
      */
-    if (serverOrders.length > 0) {
 
-      const mergedOrders = [
-        ...serverOrders
-      ];
+    activeOrders =
+      serverOrders;
 
-      activeOrders.forEach(
-        localOrder => {
-
-          const exists =
-            mergedOrders.some(
-              serverOrder =>
-                String(
-                  serverOrder.orderId
-                ) ===
-                String(
-                  localOrder.orderId
-                )
-            );
-
-          if (
-            !exists &&
-            String(
-              localOrder.status
-            ).toLowerCase() ===
-            "active"
-          ) {
-
-            mergedOrders.push(
-              localOrder
-            );
-          }
-        }
-      );
-
-      activeOrders =
-        mergedOrders;
-
-    } else {
-
-      /*
-       * Do NOT wipe locally-created orders.
-       */
-      console.warn(
-        "Orders API returned zero orders. Keeping local active orders."
-      );
-    }
-
+    /*
+     * saveOrders() only updates the badge.
+     * It does NOT write anything to localStorage.
+     */
     saveOrders();
 
     renderOrders();
@@ -1541,9 +1950,19 @@ async function syncCustomerOrders() {
       error
     );
 
+    /*
+     * IMPORTANT:
+     *
+     * We do NOT use localStorage as a fallback.
+     *
+     * If the server cannot be reached, keep the
+     * current in-memory state rather than resurrecting
+     * deleted orders from an old local cache.
+     */
     renderOrders();
   }
 }
+
 
 function renderOrders() {
 
@@ -1553,13 +1972,16 @@ function renderOrders() {
   const empty =
     $("noOrders");
 
-  if (!list) return;
+  if (!list) {
+    return;
+  }
 
   const active =
     activeOrders.filter(
       order =>
-        String(order.status)
-          .toLowerCase() ===
+        String(
+          order.status
+        ).toLowerCase() ===
         "active"
     );
 
@@ -1567,9 +1989,11 @@ function renderOrders() {
 
   if (!active.length) {
 
-    list.innerHTML = "";
+    list.innerHTML =
+      "";
 
     if (empty) {
+
       empty.style.display =
         "block";
     }
@@ -1578,137 +2002,174 @@ function renderOrders() {
   }
 
   if (empty) {
+
     empty.style.display =
       "none";
   }
 
   list.innerHTML =
     active
-      .map(order => {
+      .map(
+        order => {
 
-        const items =
-          (order.items || [])
-            .map(
-              item => `
-                <div class="order-item">
+          const items =
+            (
+              order.items ||
+              []
+            )
+              .map(
+                item => `
 
-                  <span>
-                    ${Number(
-                      item.qty ??
-                      item.quantity ??
-                      1
-                    )}
-                    ×
-                    ${esc(
-                      item.name ||
-                      item.product ||
-                      ""
-                    )}
-                  </span>
+                  <div class="order-item">
 
-                  <span>
-                    ${money(
-                      Number(
+                    <span>
+
+                      ${Number(
                         item.qty ??
                         item.quantity ??
                         1
-                      ) *
-                      Number(
-                        item.price
-                      )
-                    )}
-                  </span>
+                      )}
 
-                </div>
-              `
-            )
-            .join("");
+                      ×
 
-        const canCancel =
-          isCancellationOpen();
+                      ${esc(
+                        item.name ||
+                        item.product ||
+                        ""
+                      )}
 
-        return `
-          <div class="order-card">
+                    </span>
 
-            <div class="order-card-head">
+                    <span>
 
-              <div>
-
-                <div class="order-number">
-                  ${esc(
-                    order.orderId
-                  )}
-                </div>
-
-                <div class="order-date">
-                  ${
-                    order.createdAt ||
-                    order.date
-                      ? formatDate(
-                          order.createdAt ||
-                          order.date
+                      ${money(
+                        Number(
+                          item.qty ??
+                          item.quantity ??
+                          1
+                        ) *
+                        Number(
+                          item.price
                         )
-                      : "Order"
-                  }
+                      )}
+
+                    </span>
+
+                  </div>
+
+                `
+              )
+              .join("");
+
+          const canCancel =
+            isCancellationOpen();
+
+          return `
+
+            <div class="order-card">
+
+              <div
+                class="order-card-head"
+              >
+
+                <div>
+
+                  <div class="order-number">
+
+                    ${esc(
+                      order.orderId
+                    )}
+
+                  </div>
+
+                  <div class="order-date">
+
+                    ${
+                      order.createdAt ||
+                      order.date
+                        ? formatDate(
+                            order.createdAt ||
+                            order.date
+                          )
+                        : "Order"
+                    }
+
+                  </div>
+
+                </div>
+
+                <div class="order-status">
+                  Active
                 </div>
 
               </div>
 
-              <div class="order-status">
-                Active
+              ${items}
+
+              <div class="order-total">
+
+                <span>
+                  Total
+                </span>
+
+                <span>
+                  ${money(
+                    order.total
+                  )}
+                </span>
+
               </div>
 
+              <div
+                class="order-delivery"
+              >
+
+                🚚 Tomorrow ·
+
+                <strong>
+
+                  ${esc(
+                    order.deliverySlot ||
+                    order.slot ||
+                    ""
+                  )}
+
+                </strong>
+
+              </div>
+
+              ${
+                canCancel
+                  ? `
+
+                    <button
+                      class="cancel-order-button"
+                      type="button"
+                      data-order-id="${esc(
+                        order.orderId
+                      )}"
+                    >
+                      Cancel order
+                    </button>
+
+                  `
+                  : `
+
+                    <div
+                      class="cancel-closed"
+                    >
+                      🔒 Cancellation closed
+                      at 10:00 PM
+                    </div>
+
+                  `
+              }
+
             </div>
 
-            ${items}
-
-            <div class="order-total">
-
-              <span>Total</span>
-
-              <span>
-                ${money(
-                  order.total
-                )}
-              </span>
-
-            </div>
-
-            <div class="order-delivery">
-              🚚 Tomorrow ·
-              <strong>
-                ${esc(
-                  order.deliverySlot ||
-                  order.slot ||
-                  ""
-                )}
-              </strong>
-            </div>
-
-            ${
-              canCancel
-                ? `
-                  <button
-                    class="cancel-order-button"
-                    type="button"
-                    data-order-id="${esc(
-                      order.orderId
-                    )}"
-                  >
-                    Cancel order
-                  </button>
-                `
-                : `
-                  <div class="cancel-closed">
-                    🔒 Cancellation closed
-                    at 10:00 PM
-                  </div>
-                `
-            }
-
-          </div>
-        `;
-      })
+          `;
+        }
+      )
       .join("");
 
   list
@@ -1720,10 +2181,12 @@ function renderOrders() {
       button.onclick =
         () =>
           cancelActiveOrder(
-            button.dataset.orderId
+            button.dataset
+              .orderId
           );
     });
 }
+
 
 function formatDate(value) {
 
@@ -1739,7 +2202,10 @@ function formatDate(value) {
       date.getTime()
     )
   ) {
-    return String(value);
+
+    return String(
+      value
+    );
   }
 
   return (
@@ -1765,7 +2231,9 @@ async function cancelActiveOrder(
   fromSuccess = false
 ) {
 
-  if (!isCancellationOpen()) {
+  if (
+    !isCancellationOpen()
+  ) {
 
     toast(
       "Orders can only be cancelled before 10 PM."
@@ -1777,8 +2245,12 @@ async function cancelActiveOrder(
   const order =
     activeOrders.find(
       item =>
-        String(item.orderId) ===
-        String(orderId)
+        String(
+          item.orderId
+        ) ===
+        String(
+          orderId
+        )
     );
 
   if (!order) {
@@ -1834,6 +2306,7 @@ async function cancelActiveOrder(
       );
 
     if (!response.ok) {
+
       throw new Error(
         `Cancellation failed (${response.status})`
       );
@@ -1843,14 +2316,29 @@ async function cancelActiveOrder(
       await response.json();
 
     if (!result.ok) {
+
       throw new Error(
         result.error ||
         "Unable to cancel order."
       );
     }
 
-    order.status =
-      "Cancelled";
+    /*
+     * Remove the cancelled order from
+     * the current in-memory server state.
+     *
+     * It is NOT saved to localStorage.
+     */
+    activeOrders =
+      activeOrders.filter(
+        item =>
+          String(
+            item.orderId
+          ) !==
+          String(
+            orderId
+          )
+      );
 
     saveOrders();
 
@@ -1859,8 +2347,11 @@ async function cancelActiveOrder(
       String(
         lastOrder.orderId
       ) ===
-      String(orderId)
+      String(
+        orderId
+      )
     ) {
+
       lastOrder.status =
         "Cancelled";
     }
@@ -1868,11 +2359,13 @@ async function cancelActiveOrder(
     if (fromSuccess) {
 
       if ($("cancelOrderBtn")) {
+
         $("cancelOrderBtn").style.display =
           "none";
       }
 
       if ($("cancelInfo")) {
+
         $("cancelInfo").textContent =
           "Your order has been cancelled.";
       }
@@ -1914,6 +2407,7 @@ function setupNavigation() {
 
     logo.onclick =
       () => {
+
         show("home");
       };
   }
@@ -1931,6 +2425,7 @@ function setupNavigation() {
         if (!products.length) {
 
           $("products").innerHTML = `
+
             <div
               class="card"
               style="
@@ -1939,14 +2434,19 @@ function setupNavigation() {
                 padding:30px;
               "
             >
-              <div style="font-size:38px">
+
+              <div
+                style="font-size:38px"
+              >
                 🥖
               </div>
 
               <h3>
                 Loading tomorrow's menu...
               </h3>
+
             </div>
+
           `;
 
           await loadProducts();
@@ -1963,6 +2463,7 @@ function setupNavigation() {
     $("cartBtn");
 
   if (cartButton) {
+
     cartButton.onclick =
       openCart;
   }
@@ -1971,6 +2472,7 @@ function setupNavigation() {
     $("menuCart");
 
   if (menuCart) {
+
     menuCart.onclick =
       openCart;
   }
@@ -1979,6 +2481,7 @@ function setupNavigation() {
     $("close");
 
   if (close) {
+
     close.onclick =
       closeCart;
   }
@@ -1989,6 +2492,7 @@ function setupNavigation() {
     );
 
   if (shade) {
+
     shade.onclick =
       closeCart;
   }
@@ -2046,6 +2550,10 @@ function setupNavigation() {
 
         show("orders");
 
+        /*
+         * Render current in-memory state first,
+         * then ALWAYS refresh from Google Sheets.
+         */
         renderOrders();
 
         await syncCustomerOrders();
@@ -2075,6 +2583,7 @@ function setupNavigation() {
         show("menu");
 
         if (!products.length) {
+
           await loadProducts();
         }
 
@@ -2094,6 +2603,7 @@ function setupNavigation() {
         show("menu");
 
         if (!products.length) {
+
           await loadProducts();
         }
 
@@ -2129,7 +2639,9 @@ function setupCheckoutForm() {
   const form =
     $("checkoutForm");
 
-  if (!form) return;
+  if (!form) {
+    return;
+  }
 
   form.addEventListener(
     "submit",
@@ -2158,6 +2670,20 @@ async function init() {
    */
   normalizeStoredCustomer();
 
+  /*
+   * Make absolutely sure no old active-order
+   * cache survives from a previous version.
+   */
+  localStorage.removeItem(
+    "mb_active_orders"
+  );
+
+  /*
+   * Active orders always start empty.
+   * They will be loaded from Google Sheets.
+   */
+  activeOrders = [];
+
   updateCartBadges();
   updateOrdersBadge();
 
@@ -2170,12 +2696,13 @@ async function init() {
 
   /*
    * If an existing customer is stored,
-   * sync their orders on startup.
+   * sync their orders from Google Sheets.
    */
   if (
     customer &&
     customer.phone
   ) {
+
     syncCustomerOrders();
   }
 
