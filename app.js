@@ -77,103 +77,47 @@ function isCancellationOpen() {
 
 
 /* =========================
-   INSTALL APP
+   DIRECT APP INSTALL
 ========================= */
-
-function isIOS() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+function isIOS(){
+  return /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform==="MacIntel" && navigator.maxTouchPoints>1);
 }
-
-function isAndroid() {
-  return /android/i.test(navigator.userAgent);
-}
-
-function isStandalone() {
+function isAndroid(){ return /android/i.test(navigator.userAgent); }
+function isStandalone(){
   return window.matchMedia("(display-mode: standalone)").matches ||
-    window.navigator.standalone === true;
+    window.navigator.standalone===true;
 }
-
-function setupInstallCTA() {
-  const btn = $("installAppBtn");
-  const hint = $("installHint");
-
-  if (!btn) return;
-
-  if (isStandalone()) {
-    btn.classList.add("installed");
-    return;
-  }
-
-  if (isIOS()) {
-    hint.textContent = "Add it to your iPhone Home Screen";
-  } else if (isAndroid()) {
-    hint.textContent = "Install it on your Android phone";
-  } else {
-    hint.textContent = "Install it on your phone";
-  }
-
-  btn.onclick = async () => {
-    if (deferredInstallPrompt) {
+function setupInstallCTA(){
+  const btn=$("installAppBtn"), hint=$("installHint"), title=$("installTitle");
+  if(!btn)return;
+  if(isStandalone()){btn.classList.add("installed");return;}
+  if(isIOS()){title.textContent="Install MoharamBake";hint.textContent="Add it to your iPhone Home Screen";}
+  else if(isAndroid()){title.textContent="Install MoharamBake";hint.textContent="Install the app on your Android phone";}
+  else{hint.textContent="Install the app on your phone";}
+  btn.onclick=async()=>{
+    if(deferredInstallPrompt){
       deferredInstallPrompt.prompt();
-
-      const result = await deferredInstallPrompt.userChoice;
-      deferredInstallPrompt = null;
-
-      if (result.outcome === "accepted") {
-        btn.classList.add("installed");
-      }
-
+      const result=await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt=null;
+      if(result&&result.outcome==="accepted")btn.classList.add("installed");
       return;
     }
-
-    showInstallInstructions();
+    if(isIOS()){$("iosInstallModal").hidden=false;return;}
+    toast("Open your browser menu and choose Install app.");
   };
 }
-
-function showInstallInstructions() {
-  const help = $("installHelp");
-  const title = $("installTitle");
-  const text = $("installText");
-
-  if (!help || !title || !text) return;
-
-  if (isIOS()) {
-    title.textContent = "Install on iPhone";
-    text.innerHTML =
-      'Open this page in <strong>Safari</strong>, tap the <strong>Share</strong> button, then choose <strong>Add to Home Screen</strong>.';
-  } else if (isAndroid()) {
-    title.textContent = "Install on Android";
-    text.innerHTML =
-      'In Chrome, tap the <strong>Install</strong> button if shown, or open the <strong>⋮ menu</strong> and choose <strong>Install app</strong> or <strong>Add to Home screen</strong>.';
-  } else {
-    title.textContent = "Install MoharamBake";
-    text.innerHTML =
-      'Open this site on your phone. On Android use Chrome → <strong>Install app</strong>. On iPhone use Safari → <strong>Share → Add to Home Screen</strong>.';
-  }
-
-  help.hidden = false;
-}
-
-function setupInstallPrompt() {
-  window.addEventListener("beforeinstallprompt", event => {
-    event.preventDefault();
-    deferredInstallPrompt = event;
-    setupInstallCTA();
+function setupInstallPrompt(){
+  window.addEventListener("beforeinstallprompt",event=>{
+    event.preventDefault();deferredInstallPrompt=event;setupInstallCTA();
   });
-
-  window.addEventListener("appinstalled", () => {
-    deferredInstallPrompt = null;
-    const btn = $("installAppBtn");
-    if (btn) btn.classList.add("installed");
+  window.addEventListener("appinstalled",()=>{
+    deferredInstallPrompt=null;
+    const btn=$("installAppBtn");if(btn)btn.classList.add("installed");
   });
-
-  const close = $("closeInstallHelp");
-  if (close) {
-    close.onclick = () => {
-      $("installHelp").hidden = true;
-    };
-  }
-
+  const close=$("closeInstallModal"),done=$("iosDone");
+  if(close)close.onclick=()=>$("iosInstallModal").hidden=true;
+  if(done)done.onclick=()=>$("iosInstallModal").hidden=true;
   setupInstallCTA();
 }
 

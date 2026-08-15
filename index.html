@@ -31,20 +31,22 @@
     <h1>Fresh bakery,<br>delivered tomorrow.</h1>
     <p>Choose your items today and we'll prepare them fresh for your delivery slot.</p>
     <button class="primary" id="startBtn">Start ordering</button>
-
     <button class="install-cta" id="installAppBtn" type="button">
       <span class="install-icon">📱</span>
-      <span>
-        <strong>Install MoharamBake</strong>
-        <small id="installHint">Get the app on your phone</small>
-      </span>
+      <span><strong id="installTitle">Install MoharamBake</strong><small id="installHint">Get the app on your phone</small></span>
       <span class="install-arrow">›</span>
     </button>
-
-    <div id="installHelp" class="install-help" hidden>
-      <strong id="installTitle">Install MoharamBake</strong>
-      <p id="installText"></p>
-      <button id="closeInstallHelp" type="button">Got it</button>
+    <div id="iosInstallModal" class="install-modal" hidden>
+      <div class="install-modal-card">
+        <button id="closeInstallModal" class="install-modal-close" type="button">×</button>
+        <div class="install-modal-icon">📱</div>
+        <span class="eyebrow">IPHONE INSTALL</span>
+        <h3>Add MoharamBake to your Home Screen</h3>
+        <div class="ios-step"><b>1</b><span>Open this page in <strong>Safari</strong>.</span></div>
+        <div class="ios-step"><b>2</b><span>Tap the <strong>Share</strong> button ↑.</span></div>
+        <div class="ios-step"><b>3</b><span>Choose <strong>Add to Home Screen</strong>.</span></div>
+        <button id="iosDone" class="primary full" type="button">Done</button>
+      </div>
     </div>
   </div>
   <div class="features"><span>✓ Freshly prepared</span><span>✓ Compound delivery</span><span>✓ Easy checkout</span></div>
