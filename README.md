@@ -35,3 +35,9 @@ Do not put secrets or access tokens in this frontend repository.
 
 ## Google Sheets integration
 See `google-apps-script/SETUP.md`. The app is configured for live mode but requires the deployed Apps Script `/exec` URL in `app.js`.
+
+
+## Connected Google Apps Script
+The frontend is configured to use the deployed Apps Script endpoint.
+
+`https://script.google.com/macros/s/AKfycbzYoty72rrL-5K_VoSNH5hRioyae7BjvEq0Wk68DbVZf7llOo7EOHK2R-OfnBOic6Q14g/exec`

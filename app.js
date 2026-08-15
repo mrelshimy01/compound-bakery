@@ -1,6 +1,6 @@
 const CONFIG = {
   // Paste the deployed Google Apps Script /exec URL here.
-  API_URL: "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE",
+  API_URL: "https://script.google.com/macros/s/AKfycbzYoty72rrL-5K_VoSNH5hRioyae7BjvEq0Wk68DbVZf7llOo7EOHK2R-OfnBOic6Q14g/exec",
   DEMO_MODE: false,
   DELIVERY_SLOTS: [
     "8:00–10:00 AM",
