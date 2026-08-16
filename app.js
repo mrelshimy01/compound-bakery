@@ -1,323 +1,127 @@
-/* PERFORMANCE_OPTIMIZATION_V1 - non-blocking order refresh */
+const CONFIG = {
+  API_URL:
+    "https://script.google.com/macros/s/AKfycbw8NCihVEshMVlm7MK4zktq2hdGQUxeM4hHoLqPeALuSv9sLqATO-y_aAIx972wekzobQ/exec",
 
-/* =========================================================
-   CONFIGURATION
-========================================================= */
+  DEMO_MODE: false,
 
-const GOOGLE_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbw8NCihVEshMVlm7MK4zktq2hdGQUxeM4hHoLqPeALuSv9sLqATO-y_aAIx972wekzobQ/exec";
-
-
-/* =========================================================
-   APP STATE
-========================================================= */
+  DELIVERY_SLOTS: [
+    "8:00–10:00 AM",
+    "10:00 AM–12:00 PM",
+    "12:00–2:00 PM",
+    "2:00–4:00 PM"
+  ]
+};
 
 let products = [];
 
-let cart = [];
+let cart = JSON.parse(
+  localStorage.getItem("mb_cart") || "[]"
+);
 
+let customer = JSON.parse(
+  localStorage.getItem("mb_customer") || "null"
+);
+
+/*
+ * IMPORTANT:
+ *
+ * Active orders are NEVER stored locally.
+ * Google Sheets is the single source of truth.
+ */
 let activeOrders = [];
 
-let customer = null;
+/*
+ * Delete the old local order cache from previous
+ * versions of the application.
+ */
+localStorage.removeItem("mb_active_orders");
 
 let selectedSlot = "";
-
-let currentCategory = "All";
-
-let currentView = "home";
-
 let lastOrder = null;
+let deferredInstallPrompt = null;
+
+const $ = id => document.getElementById(id);
 
 
 /* =========================================================
-   HELPERS
+   PHONE NUMBER
 ========================================================= */
 
-function $(id) {
-  return document.getElementById(id);
-}
-
-
-function cleanValue(value) {
+function normalizePhone(phone) {
 
   if (
-    value === null ||
-    value === undefined
+    phone === null ||
+    phone === undefined
   ) {
     return "";
   }
 
-  return String(value).trim();
-}
-
-
-function normalizePhone(phone) {
-
   let value =
-    cleanValue(phone)
-      .replace(/\s+/g, "")
-      .replace(/-/g, "")
-      .replace(/\(/g, "")
-      .replace(/\)/g, "");
+    String(phone).trim();
+
+  value =
+    value.replace(/[^\d+]/g, "");
+
+  value =
+    value.replace(/^\+/, "");
+
+  value =
+    value.replace(/\.0$/, "");
 
   /*
-   * Remove Egypt country prefix.
-   *
-   * +201xxxxxxxxx
-   * 00201xxxxxxxxx
-   *
-   * become:
-   *
-   * 01xxxxxxxxx
+   * +20XXXXXXXXXX
    */
-
   if (
-    value.indexOf("+20") === 0
+    value.startsWith("20") &&
+    value.length === 12
   ) {
 
     value =
       "0" +
-      value.substring(3);
+      value.substring(2);
+  }
 
-  } else if (
-    value.indexOf("0020") === 0
+  /*
+   * 0020XXXXXXXXXX
+   */
+  else if (
+    value.startsWith("0020")
   ) {
 
     value =
       "0" +
       value.substring(4);
-
   }
 
   /*
-   * If the number is already stored without
-   * the leading zero, restore it.
+   * 002XXXXXXXXXX
    */
+  else if (
+    value.startsWith("002")
+  ) {
 
+    value =
+      "0" +
+      value.substring(3);
+  }
+
+  value =
+    value.replace(/\D/g, "");
+
+  /*
+   * 1275122774 -> 01275122774
+   */
   if (
-    /^1\d{9}$/.test(value)
+    value.length === 10 &&
+    value.startsWith("1")
   ) {
 
     value =
       "0" +
       value;
-
   }
 
   return value;
-}
-
-
-function formatPhoneForStorage(phone) {
-
-  const normalized =
-    normalizePhone(phone);
-
-  return normalized;
-}
-
-
-function getCustomerUserId() {
-
-  if (
-    customer &&
-    customer.userId
-  ) {
-
-    return cleanValue(
-      customer.userId
-    );
-  }
-
-  return "";
-}
-
-
-/* =========================================================
-   LOCAL STORAGE
-========================================================= */
-
-const STORAGE_KEYS = {
-
-  customer:
-    "moharambake_customer",
-
-  cart:
-    "moharambake_cart",
-
-  orders:
-    "moharambake_orders",
-
-  userId:
-    "moharambake_user_id"
-};
-
-
-function saveCustomer() {
-
-  try {
-
-    localStorage.setItem(
-      STORAGE_KEYS.customer,
-      JSON.stringify(
-        customer || null
-      )
-    );
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to save customer:",
-      error
-    );
-  }
-}
-
-
-function loadCustomer() {
-
-  try {
-
-    const value =
-      localStorage.getItem(
-        STORAGE_KEYS.customer
-      );
-
-    if (!value) {
-
-      return null;
-    }
-
-    const parsed =
-      JSON.parse(value);
-
-    if (
-      !parsed ||
-      typeof parsed !== "object"
-    ) {
-
-      return null;
-    }
-
-    return parsed;
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to load customer:",
-      error
-    );
-
-    return null;
-  }
-}
-
-
-function saveCart() {
-
-  try {
-
-    localStorage.setItem(
-      STORAGE_KEYS.cart,
-      JSON.stringify(
-        cart || []
-      )
-    );
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to save cart:",
-      error
-    );
-  }
-}
-
-
-function loadCart() {
-
-  try {
-
-    const value =
-      localStorage.getItem(
-        STORAGE_KEYS.cart
-      );
-
-    if (!value) {
-
-      return [];
-    }
-
-    const parsed =
-      JSON.parse(value);
-
-    return Array.isArray(parsed)
-      ? parsed
-      : [];
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to load cart:",
-      error
-    );
-
-    return [];
-  }
-}
-
-
-function saveOrders() {
-
-  try {
-
-    localStorage.setItem(
-      STORAGE_KEYS.orders,
-      JSON.stringify(
-        activeOrders || []
-      )
-    );
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to save orders:",
-      error
-    );
-  }
-}
-
-
-function loadOrders() {
-
-  try {
-
-    const value =
-      localStorage.getItem(
-        STORAGE_KEYS.orders
-      );
-
-    if (!value) {
-
-      return [];
-    }
-
-    const parsed =
-      JSON.parse(value);
-
-    return Array.isArray(parsed)
-      ? parsed
-      : [];
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to load orders:",
-      error
-    );
-
-    return [];
-  }
 }
 
 
@@ -325,253 +129,590 @@ function loadOrders() {
    USER ID
 ========================================================= */
 
-function getStoredUserId() {
+/*
+ * The User ID is deterministic.
+ *
+ * Same phone number = same User ID.
+ *
+ * Example:
+ *
+ * 01275122774
+ * ->
+ * MBU-184C1A84939B3AF78B9C
+ *
+ * We use SHA-256 and take the first 20 hex characters.
+ *
+ * The Google Apps Script uses the same SHA-256 algorithm.
+ */
 
-  try {
+async function generateUserId(phone) {
 
-    return cleanValue(
-      localStorage.getItem(
-        STORAGE_KEYS.userId
-      )
-    );
+  const normalized =
+    normalizePhone(phone);
 
-  } catch (error) {
-
+  if (!normalized) {
     return "";
   }
-}
-
-
-function saveUserId(userId) {
-
-  const value =
-    cleanValue(userId);
-
-  if (!value) {
-
-    return;
-  }
-
-  try {
-
-    localStorage.setItem(
-      STORAGE_KEYS.userId,
-      value
-    );
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to save User ID:",
-      error
-    );
-  }
-}
-
-
-async function ensureCustomerUserId() {
 
   if (
-    customer &&
-    customer.userId
+    window.crypto &&
+    window.crypto.subtle
   ) {
 
-    return customer.userId;
+    const data =
+      new TextEncoder().encode(
+        normalized
+      );
+
+    const hashBuffer =
+      await crypto.subtle.digest(
+        "SHA-256",
+        data
+      );
+
+    const hashArray =
+      Array.from(
+        new Uint8Array(
+          hashBuffer
+        )
+      );
+
+    const hashHex =
+      hashArray
+        .map(
+          byte =>
+            byte
+              .toString(16)
+              .padStart(2, "0")
+        )
+        .join("")
+        .substring(0, 20)
+        .toUpperCase();
+
+    return "MBU-" + hashHex;
   }
 
-  const storedUserId =
-    getStoredUserId();
+  throw new Error(
+    "Your browser does not support secure User ID generation."
+  );
+}
 
-  if (storedUserId) {
 
-    if (!customer) {
+/*
+ * Make sure the customer has the correct User ID.
+ *
+ * IMPORTANT:
+ * We regenerate it from the current phone every time.
+ * This prevents a stale User ID if the customer changes
+ * their phone number.
+ */
+async function ensureCustomerUserId() {
 
-      customer = {};
-    }
-
-    customer.userId =
-      storedUserId;
-
-    saveCustomer();
-
-    return storedUserId;
+  if (!customer) {
+    return "";
   }
 
-  return "";
+  customer =
+    normalizeCustomer(
+      customer
+    );
+
+  if (!customer.phone) {
+    return "";
+  }
+
+  customer.userId =
+    await generateUserId(
+      customer.phone
+    );
+
+  saveCustomer();
+
+  return customer.userId;
 }
 
 
 /* =========================================================
-   GOOGLE SHEETS API
+   CUSTOMER
 ========================================================= */
 
-async function callGoogleScript(
-  params = {},
-  options = {}
-) {
+function normalizeCustomer(data) {
 
-  const query =
-    new URLSearchParams();
+  if (!data) {
+    return null;
+  }
 
-  Object.keys(params).forEach(
-    key => {
+  return {
 
-      const value =
-        params[key];
+    userId:
+      String(
+        data.userId || ""
+      ).trim(),
 
-      if (
-        value !== undefined &&
-        value !== null
-      ) {
+    name:
+      String(
+        data.name || ""
+      ).trim(),
 
-        if (
-          typeof value === "object"
-        ) {
+    phone:
+      normalizePhone(
+        data.phone || ""
+      ),
 
-          query.set(
-            key,
-            JSON.stringify(value)
-          );
+    address:
+      String(
+        data.address || ""
+      ).trim()
+  };
+}
 
-        } else {
 
-          query.set(
-            key,
-            String(value)
-          );
-        }
-      }
-    }
+/* =========================================================
+   BASIC HELPERS
+========================================================= */
+
+function money(value) {
+
+  const n =
+    Number(value) || 0;
+
+  return `${n
+    .toFixed(2)
+    .replace(/\.00$/, "")
+    .replace(/(\.\d)0$/, "")} EGP`;
+}
+
+
+function esc(value) {
+
+  return String(
+    value ?? ""
+  ).replace(
+    /[&<>"']/g,
+    char => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;"
+    })[char]
+  );
+}
+
+
+function toast(message) {
+
+  const el =
+    $("toast");
+
+  if (!el) {
+    return;
+  }
+
+  el.textContent =
+    message;
+
+  el.classList.add(
+    "show"
   );
 
-  const url =
-    GOOGLE_SCRIPT_URL +
-    "?" +
-    query.toString();
+  setTimeout(() => {
 
-  console.log(
-    "Calling Google Apps Script:",
-    url
+    el.classList.remove(
+      "show"
+    );
+
+  }, 2500);
+}
+
+
+function show(screenId) {
+
+  document
+    .querySelectorAll(".screen")
+    .forEach(
+      screen =>
+        screen.classList.remove(
+          "active"
+        )
+    );
+
+  const target =
+    $(screenId);
+
+  if (!target) {
+
+    console.warn(
+      "Screen not found:",
+      screenId
+    );
+
+    return;
+  }
+
+  target.classList.add(
+    "active"
   );
 
-  const controller =
-    new AbortController();
+  window.scrollTo({
+    top: 0,
+    behavior: "instant"
+  });
+}
 
-  const timeout =
-    options.timeout ||
-    30000;
 
-  const timeoutId =
-    setTimeout(
-      () => controller.abort(),
-      timeout
+/* =========================================================
+   LOCAL STORAGE
+========================================================= */
+
+function saveCart() {
+
+  localStorage.setItem(
+    "mb_cart",
+    JSON.stringify(cart)
+  );
+
+  updateCartBadges();
+}
+
+
+function saveCustomer() {
+
+  if (customer) {
+
+    customer =
+      normalizeCustomer(
+        customer
+      );
+  }
+
+  localStorage.setItem(
+    "mb_customer",
+    JSON.stringify(
+      customer
+    )
+  );
+}
+
+
+/*
+ * Orders are NOT saved locally.
+ */
+function saveOrders() {
+
+  updateOrdersBadge();
+}
+
+
+function normalizeStoredCustomer() {
+
+  if (!customer) {
+    return;
+  }
+
+  const normalized =
+    normalizeCustomer(
+      customer
     );
 
-  try {
+  if (
+    JSON.stringify(
+      normalized
+    ) !==
+    JSON.stringify(
+      customer
+    )
+  ) {
 
-    const response =
-      await fetch(
-        url,
-        {
-          method: "GET",
-          cache: "no-store",
-          signal:
-            controller.signal
-        }
-      );
+    customer =
+      normalized;
 
-    clearTimeout(
-      timeoutId
-    );
-
-    if (!response.ok) {
-
-      throw new Error(
-        "Google Apps Script returned HTTP " +
-        response.status
-      );
-    }
-
-    const text =
-      await response.text();
-
-    if (!text) {
-
-      throw new Error(
-        "Google Apps Script returned an empty response."
-      );
-    }
-
-    let data;
-
-    try {
-
-      data =
-        JSON.parse(text);
-
-    } catch (error) {
-
-      console.error(
-        "Invalid JSON from Google Apps Script:",
-        text
-      );
-
-      throw new Error(
-        "Invalid response from Google Sheets backend."
-      );
-    }
-
-    return data;
-
-  } catch (error) {
-
-    clearTimeout(
-      timeoutId
-    );
-
-    if (
-      error &&
-      error.name === "AbortError"
-    ) {
-
-      throw new Error(
-        "Google Sheets request timed out."
-      );
-    }
-
-    throw error;
+    saveCustomer();
   }
 }
 
 
-async function postToGoogleScript(
-  payload = {},
-  options = {}
-) {
+/* =========================================================
+   BADGES
+========================================================= */
 
-  /*
-   * Google Apps Script Web Apps frequently redirect.
-   *
-   * We use GET with the action payload because it is
-   * reliable with the deployed Apps Script endpoint.
-   */
+function updateCartBadges() {
 
-  const params = {
+  const count =
+    cart.reduce(
+      (total, item) =>
+        total +
+        Number(
+          item.qty || 0
+        ),
+      0
+    );
 
-    action:
-      payload.action ||
-      "",
+  if ($("cartBadge")) {
 
-    payload:
-      JSON.stringify(
-        payload
-      )
-  };
+    $("cartBadge").textContent =
+      count;
+  }
 
-  return callGoogleScript(
-    params,
-    options
+  if ($("menuBadge")) {
+
+    $("menuBadge").textContent =
+      count;
+  }
+}
+
+
+function updateOrdersBadge() {
+
+  const count =
+    activeOrders.filter(
+      order =>
+        String(
+          order.status
+        ).toLowerCase() ===
+        "active"
+    ).length;
+
+  if ($("ordersBadge")) {
+
+    $("ordersBadge").textContent =
+      count;
+  }
+}
+
+
+/* =========================================================
+   CANCELLATION
+========================================================= */
+
+function isCancellationOpen() {
+
+  const now =
+    new Date();
+
+  const cutoff =
+    new Date(now);
+
+  cutoff.setHours(
+    22,
+    0,
+    0,
+    0
   );
+
+  return now < cutoff;
+}
+
+
+/* =========================================================
+   INSTALL APP
+========================================================= */
+
+function isIOS() {
+
+  return (
+    /iphone|ipad|ipod/i.test(
+      navigator.userAgent
+    ) ||
+    (
+      navigator.platform ===
+        "MacIntel" &&
+      navigator.maxTouchPoints > 1
+    )
+  );
+}
+
+
+function isAndroid() {
+
+  return /android/i.test(
+    navigator.userAgent
+  );
+}
+
+
+function isStandalone() {
+
+  return (
+    window.matchMedia(
+      "(display-mode: standalone)"
+    ).matches ||
+    window.navigator.standalone ===
+      true
+  );
+}
+
+
+function setupInstallCTA() {
+
+  const button =
+    $("installAppBtn");
+
+  const hint =
+    $("installHint");
+
+  const title =
+    $("installTitle");
+
+  if (!button) {
+    return;
+  }
+
+  if (isStandalone()) {
+
+    button.classList.add(
+      "installed"
+    );
+
+    return;
+  }
+
+  if (isIOS()) {
+
+    if (title) {
+
+      title.textContent =
+        "Install MoharamBake";
+    }
+
+    if (hint) {
+
+      hint.textContent =
+        "Add it to your iPhone Home Screen";
+    }
+
+  } else if (isAndroid()) {
+
+    if (title) {
+
+      title.textContent =
+        "Install MoharamBake";
+    }
+
+    if (hint) {
+
+      hint.textContent =
+        "Install the app on your Android phone";
+    }
+
+  } else {
+
+    if (hint) {
+
+      hint.textContent =
+        "Install the app on your phone";
+    }
+  }
+
+  button.onclick =
+    async () => {
+
+      if (deferredInstallPrompt) {
+
+        deferredInstallPrompt.prompt();
+
+        const result =
+          await deferredInstallPrompt.userChoice;
+
+        deferredInstallPrompt =
+          null;
+
+        if (
+          result &&
+          result.outcome ===
+            "accepted"
+        ) {
+
+          button.classList.add(
+            "installed"
+          );
+        }
+
+        return;
+      }
+
+      if (isIOS()) {
+
+        const modal =
+          $("iosInstallModal");
+
+        if (modal) {
+
+          modal.hidden =
+            false;
+        }
+
+        return;
+      }
+
+      toast(
+        "Open your browser menu and choose Install app."
+      );
+    };
+}
+
+
+function setupInstallPrompt() {
+
+  window.addEventListener(
+    "beforeinstallprompt",
+    event => {
+
+      event.preventDefault();
+
+      deferredInstallPrompt =
+        event;
+
+      setupInstallCTA();
+    }
+  );
+
+  window.addEventListener(
+    "appinstalled",
+    () => {
+
+      deferredInstallPrompt =
+        null;
+
+      const button =
+        $("installAppBtn");
+
+      if (button) {
+
+        button.classList.add(
+          "installed"
+        );
+      }
+    }
+  );
+
+  const close =
+    $("closeInstallModal");
+
+  const done =
+    $("iosDone");
+
+  if (close) {
+
+    close.onclick =
+      () => {
+
+        $("iosInstallModal").hidden =
+          true;
+      };
+  }
+
+  if (done) {
+
+    done.onclick =
+      () => {
+
+        $("iosInstallModal").hidden =
+          true;
+      };
+  }
+
+  setupInstallCTA();
 }
 
 
@@ -581,138 +722,144 @@ async function postToGoogleScript(
 
 async function loadProducts() {
 
+  if (
+    CONFIG.DEMO_MODE ||
+    !CONFIG.API_URL
+  ) {
+
+    products = [];
+
+    renderProductsError(
+      "Google Sheets integration is not configured."
+    );
+
+    return;
+  }
+
   try {
+
+    const url =
+      CONFIG.API_URL +
+      "?action=products&_=" +
+      Date.now();
 
     console.log(
       "Loading products from:",
-      GOOGLE_SCRIPT_URL
+      url
     );
 
     const response =
-      await callGoogleScript(
+      await fetch(
+        url,
         {
-          action:
-            "products"
+          method: "GET",
+          cache: "no-store",
+          redirect: "follow"
         }
       );
 
-    console.log(
-      "Google Sheets products response:",
-      response
-    );
-
-    if (
-      !response ||
-      response.ok !== true
-    ) {
+    if (!response.ok) {
 
       throw new Error(
-        response &&
-        response.error
-          ? response.error
-          : "Unable to load products."
+        `Google Apps Script returned HTTP ${response.status}`
       );
     }
 
-    const rawProducts =
-      Array.isArray(
-        response.products
+    const data =
+      await response.json();
+
+    console.log(
+      "Google Sheets products response:",
+      data
+    );
+
+    if (
+      !data ||
+      data.ok !== true
+    ) {
+
+      throw new Error(
+        data?.error ||
+        "Google Sheets returned an invalid response."
+      );
+    }
+
+    if (
+      !Array.isArray(
+        data.products
       )
-        ? response.products
-        : [];
+    ) {
+
+      throw new Error(
+        "Products response is not an array."
+      );
+    }
 
     products =
-      rawProducts.map(
-        item => {
-
-          return {
+      data.products
+        .map(
+          product => ({
 
             id:
-              cleanValue(
-                item.id ??
-                item.productId ??
-                item.ID
-              ),
-
-            productId:
-              cleanValue(
-                item.productId ??
-                item.id ??
-                item.ID
-              ),
+              product.id,
 
             name:
-              cleanValue(
-                item.name ??
-                item.product ??
-                item.Product
-              ),
-
-            product:
-              cleanValue(
-                item.product ??
-                item.name ??
-                item.Product
-              ),
+              product.name,
 
             category:
-              cleanValue(
-                item.category ??
-                item.Category
-              ),
+              product.category ||
+              "Bakery",
 
             price:
               Number(
-                item.price ??
-                item.Price ??
-                0
-              ),
+                product.price
+              ) || 0,
 
             emoji:
-              cleanValue(
-                item.emoji ??
-                item.Emoji
-              ),
-
-            image:
-              cleanValue(
-                item.image ??
-                item.Image ??
-                item.photo ??
-                item.Photo
-              ),
+              product.emoji ||
+              "🥖",
 
             active:
-              item.active !== false
-          };
-        }
-      );
+              product.active !==
+              false
+
+          })
+        )
+        .filter(
+          product =>
+            product.name &&
+            product.active !==
+              false
+        );
 
     console.log(
-      "Loaded " +
-      products.length +
-      " products."
+      `Loaded ${products.length} products.`,
+      products
     );
 
     renderCats();
     renderProducts();
+
+    if (!products.length) {
+
+      renderProductsError(
+        "No active products were found in Google Sheets."
+      );
+    }
 
     return products;
 
   } catch (error) {
 
     console.error(
-      "Load products error:",
+      "Google Sheets products error:",
       error
     );
 
     products = [];
 
-    renderCats();
-    renderProducts();
-
-    toast(
-      "Unable to load tomorrow's menu."
+    renderProductsError(
+      "We couldn't load the menu from Google Sheets."
     );
 
     return [];
@@ -720,256 +867,275 @@ async function loadProducts() {
 }
 
 
-/* =========================================================
-   PRODUCT DISPLAY
-========================================================= */
-
-function getProductVisual(
-  product
+function renderProductsError(
+  message
 ) {
-
-  if (
-    product &&
-    product.image
-  ) {
-
-    return `
-      <img
-        src="${escapeHtml(
-          product.image
-        )}"
-        alt="${escapeHtml(
-          product.name || ""
-        )}"
-        style="
-          width:64px;
-          height:64px;
-          object-fit:contain;
-          display:block;
-        "
-        onerror="
-          this.style.display='none';
-          this.nextElementSibling.style.display='block';
-        "
-      >
-      <span
-        style="
-          font-size:48px;
-          display:none;
-        "
-      >${escapeHtml(
-        product.emoji || "🥖"
-      )}</span>
-    `;
-
-  }
-
-  return `
-    <span
-      style="
-        font-size:48px;
-      "
-    >${escapeHtml(
-      product &&
-      product.emoji
-        ? product.emoji
-        : "🥖"
-    )}</span>
-  `;
-}
-
-
-function renderCats() {
-
-  const container =
-    $("categories");
-
-  if (!container) {
-
-    return;
-  }
-
-  const categories =
-    [
-      "All",
-      ...new Set(
-        products
-          .map(
-            p =>
-              cleanValue(
-                p.category
-              )
-          )
-          .filter(Boolean)
-      )
-    ];
-
-  container.innerHTML =
-    categories
-      .map(
-        category => {
-
-          const active =
-            category ===
-            currentCategory;
-
-          return `
-            <button
-              class="category-btn ${
-                active
-                  ? "active"
-                  : ""
-              }"
-              onclick="selectCategory('${escapeJs(
-                category
-              )}')"
-            >
-              ${escapeHtml(
-                category
-              )}
-            </button>
-          `;
-        }
-      )
-      .join("");
-}
-
-
-function selectCategory(
-  category
-) {
-
-  currentCategory =
-    category;
-
-  renderCats();
-  renderProducts();
-}
-
-
-function renderProducts() {
 
   const container =
     $("products");
 
   if (!container) {
-
     return;
   }
 
-  let visibleProducts =
-    products.filter(
-      product =>
-        product.active !== false
-    );
+  container.innerHTML = `
 
-  if (
-    currentCategory !==
-    "All"
-  ) {
+    <div
+      class="card"
+      style="
+        grid-column:1/-1;
+        text-align:center;
+        padding:30px 18px;
+      "
+    >
 
-    visibleProducts =
-      visibleProducts.filter(
-        product =>
-          cleanValue(
-            product.category
-          ) ===
-          currentCategory
-      );
-  }
+      <div style="font-size:42px">
+        🥖
+      </div>
 
-  if (
-    visibleProducts.length ===
-    0
-  ) {
+      <h3>
+        Menu unavailable
+      </h3>
 
-    container.innerHTML = `
-      <div
-        class="card"
+      <p
         style="
-          grid-column:1/-1;
-          text-align:center;
-          padding:40px;
+          color:#8c7d72;
+          font-size:13px;
+          line-height:1.5;
         "
       >
-        <div
-          style="font-size:48px"
-        >
-          📦
-        </div>
+        ${esc(message)}
+      </p>
 
-        <h3>
-          No products available
-        </h3>
+      <button
+        class="primary"
+        id="refreshMenuBtn"
+        type="button"
+      >
+        Refresh menu
+      </button>
 
-        <p>
-          Please check again later.
-        </p>
-      </div>
-    `;
+    </div>
+  `;
+
+  const button =
+    $("refreshMenuBtn");
+
+  if (button) {
+
+    button.onclick =
+      async () => {
+
+        button.disabled =
+          true;
+
+        button.textContent =
+          "Loading...";
+
+        await loadProducts();
+
+        if (
+          products.length
+        ) {
+
+          toast(
+            "Menu updated."
+          );
+        }
+
+        button.disabled =
+          false;
+
+        button.textContent =
+          "Refresh menu";
+      };
+  }
+}
+
+
+/* =========================================================
+   CATEGORIES
+========================================================= */
+
+function renderCats() {
+
+  const container =
+    $("cats");
+
+  if (!container) {
+    return;
+  }
+
+  const categories = [
+    "All",
+    ...new Set(
+      products
+        .map(
+          product =>
+            product.category
+        )
+        .filter(Boolean)
+    )
+  ];
+
+  container.innerHTML =
+    categories
+      .map(
+        (
+          category,
+          index
+        ) => `
+
+          <button
+            class="chip ${
+              index === 0
+                ? "active"
+                : ""
+            }"
+            data-cat="${esc(
+              category
+            )}"
+            type="button"
+          >
+            ${esc(category)}
+          </button>
+
+        `
+      )
+      .join("");
+
+  container
+    .querySelectorAll(
+      ".chip"
+    )
+    .forEach(
+      button => {
+
+        button.onclick =
+          () => {
+
+            container
+              .querySelectorAll(
+                ".chip"
+              )
+              .forEach(
+                x =>
+                  x.classList.remove(
+                    "active"
+                  )
+              );
+
+            button.classList.add(
+              "active"
+            );
+
+            renderProducts(
+              button.dataset.cat
+            );
+          };
+      }
+    );
+}
+
+
+function renderProducts(
+  category = "All"
+) {
+
+  const container =
+    $("products");
+
+  if (!container) {
+    return;
+  }
+
+  const filtered =
+    category === "All"
+      ? products
+      : products.filter(
+          product =>
+            product.category ===
+            category
+        );
+
+  if (!filtered.length) {
+
+    renderProductsError(
+      "There are no products in this category."
+    );
 
     return;
   }
 
   container.innerHTML =
-    visibleProducts
+    filtered
       .map(
-        product => {
+        product => `
 
-          return `
-            <div
-              class="card product-card"
-            >
+          <article class="product">
 
-              <div
-                class="product-emoji"
-              >
-                ${getProductVisual(
-                  product
+            <div class="emoji">
+              ${esc(
+                product.emoji
+              )}
+            </div>
+
+            <h3>
+              ${esc(
+                product.name
+              )}
+            </h3>
+
+            <div class="meta">
+              ${esc(
+                product.category ||
+                "Bakery"
+              )}
+            </div>
+
+            <div class="bottom">
+
+              <span class="price">
+                ${money(
+                  product.price
                 )}
-              </div>
+              </span>
 
-              <h3>
-                ${escapeHtml(
-                  product.name
-                )}
-              </h3>
-
-              <div
-                class="muted"
+              <button
+                class="add"
+                type="button"
+                data-product-id="${esc(
+                  product.id
+                )}"
               >
-                ${escapeHtml(
-                  product.category
-                )}
-              </div>
-
-              <div
-                class="product-bottom"
-              >
-
-                <strong>
-                  ${formatMoney(
-                    product.price
-                  )}
-                  EGP
-                </strong>
-
-                <button
-                  class="add-btn"
-                  onclick="addToCart('${escapeJs(
-                    product.productId
-                  )}')"
-                >
-                  +
-                </button>
-
-              </div>
+                +
+              </button>
 
             </div>
-          `;
-        }
+
+          </article>
+
+        `
       )
       .join("");
+
+  container
+    .querySelectorAll(
+      ".add"
+    )
+    .forEach(
+      button => {
+
+        button.onclick =
+          () => {
+
+            add(
+              button.dataset
+                .productId
+            );
+          };
+      }
+    );
 }
 
 
@@ -977,33 +1143,19 @@ function renderProducts() {
    CART
 ========================================================= */
 
-function findProduct(
-  productId
-) {
-
-  return products.find(
-    product =>
-      String(
-        product.productId
-      ) ===
-      String(productId)
-  );
-}
-
-
-function addToCart(
-  productId
-) {
+function add(id) {
 
   const product =
-    findProduct(
-      productId
+    products.find(
+      item =>
+        String(item.id) ===
+        String(id)
     );
 
   if (!product) {
 
     toast(
-      "Product not found."
+      "Product is unavailable."
     );
 
     return;
@@ -1012,88 +1164,61 @@ function addToCart(
   const existing =
     cart.find(
       item =>
-        String(
-          item.productId
-        ) ===
-        String(productId)
+        String(item.id) ===
+        String(id)
     );
 
   if (existing) {
 
-    existing.qty =
-      Number(
-        existing.qty || 0
-      ) + 1;
+    existing.qty +=
+      1;
 
   } else {
 
     cart.push({
 
-      productId:
-        product.productId,
-
       id:
-        product.productId,
+        product.id,
 
       name:
         product.name,
 
-      product:
-        product.name,
-
       price:
         Number(
-          product.price || 0
+          product.price
         ),
 
       qty:
-        1,
-
-      emoji:
-        product.emoji || "",
-
-      image:
-        product.image || ""
+        1
     });
   }
 
   saveCart();
 
-  renderCart();
-
-  updateCartBadges();
-
   toast(
-    product.name +
-    " added to cart."
+    `${product.name} added`
   );
 }
 
 
-function changeCartQty(
-  productId,
+function change(
+  id,
   delta
 ) {
 
   const item =
     cart.find(
-      entry =>
-        String(
-          entry.productId
-        ) ===
-        String(productId)
+      x =>
+        String(x.id) ===
+        String(id)
     );
 
   if (!item) {
-
     return;
   }
 
-  item.qty =
-    Number(
-      item.qty || 0
-    ) +
-    Number(delta || 0);
+  item.qty +=
+    delta;
 
   if (
     item.qty <= 0
@@ -1101,294 +1226,186 @@ function changeCartQty(
 
     cart =
       cart.filter(
-        entry =>
-          String(
-            entry.productId
-          ) !==
-          String(productId)
+        x =>
+          String(x.id) !==
+          String(id)
       );
   }
 
   saveCart();
 
   renderCart();
-
-  updateCartBadges();
-}
-
-
-function cartSubtotal() {
-
-  return cart.reduce(
-    (
-      total,
-      item
-    ) => {
-
-      return (
-        total +
-        Number(
-          item.price || 0
-        ) *
-        Number(
-          item.qty || 0
-        )
-      );
-
-    },
-    0
-  );
-}
-
-
-function cartDeliveryFee() {
-
-  /*
-   * Customer delivery charge.
-   */
-  return 5;
-}
-
-
-function cartTotal() {
-
-  return (
-    cartSubtotal() +
-    cartDeliveryFee()
-  );
-}
-
-
-function updateCartBadges() {
-
-  const count =
-    cart.reduce(
-      (
-        total,
-        item
-      ) =>
-        total +
-        Number(
-          item.qty || 0
-        ),
-      0
-    );
-
-  const elements =
-    [
-      $("cartCount"),
-      $("menuCartCount")
-    ];
-
-  elements.forEach(
-    element => {
-
-      if (!element) {
-
-        return;
-      }
-
-      element.textContent =
-        String(count);
-    }
-  );
 }
 
 
 function renderCart() {
 
-  const container =
+  const items =
     $("cartItems");
 
-  if (!container) {
+  const totalElement =
+    $("cartTotal");
 
-    updateCartBadges();
+  const checkoutButton =
+    $("checkoutBtn");
 
+  if (!items) {
     return;
   }
 
-  if (
-    cart.length === 0
-  ) {
+  const total =
+    cart.reduce(
+      (sum, item) =>
+        sum +
+        Number(
+          item.price
+        ) *
+        Number(
+          item.qty
+        ),
+      0
+    );
 
-    container.innerHTML = `
-      <div
-        style="
-          text-align:center;
-          padding:30px;
-        "
-      >
-        <div
-          style="font-size:48px"
-        >
-          🛒
-        </div>
+  if (!cart.length) {
 
-        <h3>
-          Your cart is empty
-        </h3>
-      </div>
-    `;
+    items.innerHTML =
+      "<p>Your cart is empty.</p>";
 
   } else {
 
-    container.innerHTML =
+    items.innerHTML =
       cart
         .map(
-          item => {
+          item => `
 
-            return `
-              <div
-                class="cart-row"
-              >
+            <div class="cart-line">
 
-                <div
-                  class="cart-row-left"
-                >
+              <div class="info">
 
-                  <div
-                    style="
-                      font-size:32px;
-                    "
-                  >
-                    ${getProductVisual(
-                      item
-                    )}
-                  </div>
+                <strong>
+                  ${esc(
+                    item.name
+                  )}
+                </strong>
 
-                  <div>
-
-                    <strong>
-                      ${escapeHtml(
-                        item.name
-                      )}
-                    </strong>
-
-                    <div
-                      class="muted"
-                    >
-                      ${formatMoney(
-                        item.price
-                      )}
-                      EGP
-                    </div>
-
-                  </div>
-
-                </div>
-
-                <div
-                  class="quantity-control"
-                >
-
-                  <button
-                    onclick="changeCartQty(
-                      '${escapeJs(
-                        item.productId
-                      )}',
-                      -1
-                    )"
-                  >
-                    −
-                  </button>
-
-                  <span>
-                    ${Number(
-                      item.qty || 0
-                    )}
-                  </span>
-
-                  <button
-                    onclick="changeCartQty(
-                      '${escapeJs(
-                        item.productId
-                      )}',
-                      1
-                    )"
-                  >
-                    +
-                  </button>
-
+                <div>
+                  ${money(
+                    item.price
+                  )}
                 </div>
 
               </div>
-            `;
-          }
+
+              <div class="qty">
+
+                <button
+                  type="button"
+                  data-action="minus"
+                  data-id="${esc(
+                    item.id
+                  )}"
+                >
+                  −
+                </button>
+
+                <b>
+                  ${item.qty}
+                </b>
+
+                <button
+                  type="button"
+                  data-action="plus"
+                  data-id="${esc(
+                    item.id
+                  )}"
+                >
+                  +
+                </button>
+
+              </div>
+
+            </div>
+
+          `
         )
         .join("");
+
+    items
+      .querySelectorAll(
+        "button"
+      )
+      .forEach(
+        button => {
+
+          const id =
+            button.dataset.id;
+
+          const delta =
+            button.dataset.action ===
+            "plus"
+              ? 1
+              : -1;
+
+          button.onclick =
+            () =>
+              change(
+                id,
+                delta
+              );
+        }
+      );
   }
 
-  const subtotal =
-    $("cartSubtotal");
+  if (totalElement) {
 
-  if (subtotal) {
-
-    subtotal.textContent =
-      formatMoney(
-        cartSubtotal()
-      ) +
-      " EGP";
+    totalElement.innerHTML = `
+      <div class="cart-total">
+        Total ${money(total)}
+      </div>
+    `;
   }
 
-  const delivery =
-    $("cartDelivery");
+  if (checkoutButton) {
 
-  if (delivery) {
+    checkoutButton.disabled =
+      cart.length ===
+      0;
 
-    delivery.textContent =
-      formatMoney(
-        cartDeliveryFee()
-      ) +
-      " EGP";
+    checkoutButton.style.opacity =
+      cart.length
+        ? "1"
+        : ".5";
   }
-
-  const total =
-    $("cartTotal");
-
-  if (total) {
-
-    total.textContent =
-      formatMoney(
-        cartTotal()
-      ) +
-      " EGP";
-  }
-
-  updateCartBadges();
 }
 
 
 function openCart() {
 
-  const drawer =
-    $("cartDrawer");
-
-  if (!drawer) {
-
-    return;
-  }
-
-  drawer.classList.add(
-    "open"
-  );
-
   renderCart();
+
+  const drawer =
+    $("drawer");
+
+  if (drawer) {
+
+    drawer.classList.add(
+      "open"
+    );
+  }
 }
 
 
 function closeCart() {
 
   const drawer =
-    $("cartDrawer");
+    $("drawer");
 
-  if (!drawer) {
+  if (drawer) {
 
-    return;
+    drawer.classList.remove(
+      "open"
+    );
   }
-
-  drawer.classList.remove(
-    "open"
-  );
 }
 
 
@@ -1398,376 +1415,148 @@ function closeCart() {
 
 function renderCheckout() {
 
-  const container =
-    $("checkoutItems");
+  const summary =
+    $("summary");
 
-  if (container) {
-
-    container.innerHTML =
-      cart
-        .map(
-          item => {
-
-            return `
-              <div
-                class="checkout-item"
-              >
-
-                <span>
-                  ${Number(
-                    item.qty || 0
-                  )}
-                  ×
-                  ${escapeHtml(
-                    item.name
-                  )}
-                </span>
-
-                <strong>
-                  ${formatMoney(
-                    Number(
-                      item.price || 0
-                    ) *
-                    Number(
-                      item.qty || 0
-                    )
-                  )}
-                  EGP
-                </strong>
-
-              </div>
-            `;
-          }
-        )
-        .join("");
-  }
-
-  const subtotal =
-    $("checkoutSubtotal");
-
-  if (subtotal) {
-
-    subtotal.textContent =
-      formatMoney(
-        cartSubtotal()
-      ) +
-      " EGP";
-  }
-
-  const delivery =
-    $("checkoutDelivery");
-
-  if (delivery) {
-
-    delivery.textContent =
-      formatMoney(
-        cartDeliveryFee()
-      ) +
-      " EGP";
+  if (!summary) {
+    return;
   }
 
   const total =
-    $("checkoutTotal");
+    cart.reduce(
+      (sum, item) =>
+        sum +
+        Number(
+          item.price
+        ) *
+        Number(
+          item.qty
+        ),
+      0
+    );
 
-  if (total) {
+  summary.innerHTML =
+    cart
+      .map(
+        item => `
 
-    total.textContent =
-      formatMoney(
-        cartTotal()
-      ) +
-      " EGP";
+          <div class="summary-row">
+
+            <span>
+              ${item.qty} ×
+              ${esc(
+                item.name
+              )}
+            </span>
+
+            <span>
+              ${money(
+                item.qty *
+                item.price
+              )}
+            </span>
+
+          </div>
+
+        `
+      )
+      .join("") +
+
+    `
+
+      <div class="summary-row">
+
+        <span>
+          Total
+        </span>
+
+        <span>
+          ${money(total)}
+        </span>
+
+      </div>
+
+    `;
+
+  const slots =
+    $("slots");
+
+  if (slots) {
+
+    slots.innerHTML =
+      CONFIG.DELIVERY_SLOTS
+        .map(
+          slot => `
+
+            <button
+              type="button"
+              class="slot ${
+                selectedSlot ===
+                slot
+                  ? "selected"
+                  : ""
+              }"
+              data-slot="${esc(
+                slot
+              )}"
+            >
+
+              <strong>
+                ${esc(slot)}
+              </strong>
+
+              <small>
+                Tomorrow
+              </small>
+
+            </button>
+
+          `
+        )
+        .join("");
+
+    slots
+      .querySelectorAll(
+        ".slot"
+      )
+      .forEach(
+        button => {
+
+          button.onclick =
+            () => {
+
+              selectedSlot =
+                button.dataset.slot;
+
+              renderCheckout();
+            };
+        }
+      );
   }
 
   if (customer) {
 
-    const name =
-      $("customerName");
+    if ($("name")) {
 
-    if (name) {
-
-      name.value =
-        customer.name || "";
-    }
-
-    const phone =
-      $("customerPhone");
-
-    if (phone) {
-
-      phone.value =
-        customer.phone || "";
-    }
-
-    const building =
-      $("buildingNumber");
-
-    if (building) {
-
-      building.value =
-        customer.buildingNumber ||
+      $("name").value =
+        customer.name ||
         "";
     }
 
-    const apartment =
-      $("apartmentNumber");
+    if ($("phone")) {
 
-    if (apartment) {
+      $("phone").value =
+        customer.phone ||
+        "";
+    }
 
-      apartment.value =
-        customer.apartmentNumber ||
+    if ($("address")) {
+
+      $("address").value =
+        customer.address ||
         "";
     }
   }
-}
-
-
-function getCheckoutPayload() {
-
-  const name =
-    cleanValue(
-      $("customerName") &&
-      $("customerName").value
-    );
-
-  const phone =
-    normalizePhone(
-      $("customerPhone") &&
-      $("customerPhone").value
-    );
-
-  const buildingNumber =
-    cleanValue(
-      $("buildingNumber") &&
-      $("buildingNumber").value
-    );
-
-  const apartmentNumber =
-    cleanValue(
-      $("apartmentNumber") &&
-      $("apartmentNumber").value
-    );
-
-  return {
-
-    name,
-
-    phone,
-
-    buildingNumber,
-
-    apartmentNumber,
-
-    deliverySlot:
-      selectedSlot || "",
-
-    items:
-      cart.map(
-        item => {
-
-          return {
-
-            productId:
-              item.productId,
-
-            id:
-              item.productId,
-
-            product:
-              item.name,
-
-            name:
-              item.name,
-
-            price:
-              Number(
-                item.price || 0
-              ),
-
-            quantity:
-              Number(
-                item.qty || 0
-              ),
-
-            qty:
-              Number(
-                item.qty || 0
-              ),
-
-            total:
-              Number(
-                item.price || 0
-              ) *
-              Number(
-                item.qty || 0
-              )
-          };
-        }
-      ),
-
-    subtotal:
-      cartSubtotal(),
-
-    deliveryFee:
-      cartDeliveryFee(),
-
-    total:
-      cartTotal(),
-
-    userId:
-      getCustomerUserId()
-  };
-}
-
-
-function validateCheckout(
-  payload
-) {
-
-  if (!payload.name) {
-
-    toast(
-      "Please enter your name."
-    );
-
-    return false;
-  }
-
-  if (!payload.phone) {
-
-    toast(
-      "Please enter your phone number."
-    );
-
-    return false;
-  }
-
-  if (
-    !/^01\d{9}$/.test(
-      payload.phone
-    )
-  ) {
-
-    toast(
-      "Please enter a valid Egyptian mobile number."
-    );
-
-    return false;
-  }
-
-  if (
-    !payload.buildingNumber
-  ) {
-
-    toast(
-      "Please enter the building number."
-    );
-
-    return false;
-  }
-
-  if (
-    !payload.apartmentNumber
-  ) {
-
-    toast(
-      "Please enter the apartment number."
-    );
-
-    return false;
-  }
-
-  if (
-    !payload.deliverySlot
-  ) {
-
-    toast(
-      "Please select a delivery slot."
-    );
-
-    return false;
-  }
-
-  if (
-    !Array.isArray(
-      payload.items
-    ) ||
-    payload.items.length === 0
-  ) {
-
-    toast(
-      "Your cart is empty."
-    );
-
-    return false;
-  }
-
-  return true;
-}
-
-
-/* =========================================================
-   DELIVERY SLOTS
-========================================================= */
-
-function setupDeliverySlots() {
-
-  const container =
-    $("deliverySlots");
-
-  if (!container) {
-
-    return;
-  }
-
-  const slots = [
-    "10:00 AM–12:00 PM",
-    "12:00–2:00 PM",
-    "2:00–4:00 PM",
-    "4:00–6:00 PM",
-    "6:00–8:00 PM"
-  ];
-
-  container.innerHTML =
-    slots
-      .map(
-        slot => {
-
-          const active =
-            selectedSlot ===
-            slot;
-
-          return `
-            <button
-              type="button"
-              class="slot-btn ${
-                active
-                  ? "active"
-                  : ""
-              }"
-              onclick="selectSlot('${escapeJs(
-                slot
-              )}')"
-            >
-              🚚
-              ${escapeHtml(
-                slot
-              )}
-            </button>
-          `;
-        }
-      )
-      .join("");
-}
-
-
-function selectSlot(
-  slot
-) {
-
-  selectedSlot =
-    slot;
-
-  setupDeliverySlots();
 }
 
 
@@ -1775,207 +1564,264 @@ function selectSlot(
    CREATE ORDER
 ========================================================= */
 
-async function submitOrder() {
+async function createOrder() {
 
-  const payload =
-    getCheckoutPayload();
+  if (!cart.length) {
 
-  if (
-    !validateCheckout(
-      payload
-    )
-  ) {
+    toast(
+      "Your cart is empty."
+    );
 
     return;
   }
 
-  const button =
-    $("placeOrderBtn");
+  if (!selectedSlot) {
 
-  if (button) {
+    toast(
+      "Please select a delivery slot."
+    );
 
-    button.disabled =
+    return;
+  }
+
+  const name =
+    $("name")?.value.trim();
+
+  const phone =
+    normalizePhone(
+      $("phone")?.value.trim()
+    );
+
+  const address =
+    $("address")?.value.trim();
+
+  if (
+    !name ||
+    !phone ||
+    !address
+  ) {
+
+    toast(
+      "Please complete your delivery details."
+    );
+
+    return;
+  }
+
+  /*
+   * Generate the User ID from the normalized
+   * phone number.
+   */
+  const userId =
+    await generateUserId(
+      phone
+    );
+
+  if (!userId) {
+
+    toast(
+      "Unable to create your User ID."
+    );
+
+    return;
+  }
+
+  if ($("phone")) {
+
+    $("phone").value =
+      phone;
+  }
+
+  const submitButton =
+    document.querySelector(
+      '#checkoutForm button[type="submit"]'
+    );
+
+  if (submitButton) {
+
+    submitButton.disabled =
       true;
 
-    button.dataset.originalText =
-      button.textContent;
-
-    button.textContent =
+    submitButton.textContent =
       "Placing order...";
   }
 
-  try {
+  const normalizedCustomer = {
+
+    userId,
+
+    name,
+
+    phone,
+
+    address
+  };
+
+  const orderData = {
+
+    action:
+      "createOrder",
 
     /*
-     * Save customer locally before creating order.
+     * USER ID IS NOW THE PRIMARY CUSTOMER KEY.
      */
+    userId,
 
-    customer = {
+    customer:
+      normalizedCustomer,
 
-      ...(customer || {}),
+    name,
+    phone,
+    address,
 
-      name:
-        payload.name,
+    slot:
+      selectedSlot,
 
-      phone:
-        payload.phone,
+    deliverySlot:
+      selectedSlot,
 
-      buildingNumber:
-        payload.buildingNumber,
+    items:
+      cart.map(
+        item => ({
 
-      apartmentNumber:
-        payload.apartmentNumber,
+          id:
+            item.id,
 
-      userId:
-        getCustomerUserId()
-    };
+          productId:
+            item.id,
 
-    saveCustomer();
+          name:
+            item.name,
+
+          product:
+            item.name,
+
+          price:
+            Number(
+              item.price
+            ),
+
+          qty:
+            Number(
+              item.qty
+            ),
+
+          quantity:
+            Number(
+              item.qty
+            )
+        })
+      )
+  };
+
+  try {
 
     const response =
-      await postToGoogleScript(
+      await fetch(
+        CONFIG.API_URL,
         {
-          action:
-            "createOrder",
+          method: "POST",
 
-          ...payload
-        },
-        {
-          timeout:
-            30000
+          headers: {
+            "Content-Type":
+              "text/plain;charset=utf-8"
+          },
+
+          body:
+            JSON.stringify(
+              orderData
+            )
         }
       );
 
-    console.log(
-      "Create order response:",
-      response
-    );
-
-    if (
-      !response ||
-      response.ok !== true
-    ) {
+    if (!response.ok) {
 
       throw new Error(
-        response &&
-        response.error
-          ? response.error
-          : "Unable to place order."
+        `Order request failed (${response.status})`
       );
     }
 
-    /*
-     * Capture User ID returned by backend.
-     */
+    const result =
+      await response.json();
 
-    if (
-      response.userId
-    ) {
+    console.log(
+      "Create order response:",
+      result
+    );
 
-      customer.userId =
-        cleanValue(
-          response.userId
-        );
+    if (!result.ok) {
 
-      saveUserId(
-        customer.userId
+      throw new Error(
+        result.error ||
+        "Unable to place order."
       );
-
-      saveCustomer();
     }
 
-    /*
-     * Build the confirmed order from the server response.
-     *
-     * This avoids waiting for another Google Sheets request.
-     */
+    customer =
+      normalizedCustomer;
 
-    const orderId =
-      cleanValue(
-        response.orderId ||
-        response.order &&
-        response.order.orderId
-      );
-
-    const serverTotal =
-      Number(
-        response.total ??
-        payload.total ??
-        0
-      );
+    saveCustomer();
 
     lastOrder = {
 
-      orderId,
+      orderId:
+        result.orderId,
 
-      id:
-        orderId,
+      total:
+        result.total,
 
-      userId:
-        customer.userId || "",
-
-      name:
-        payload.name,
-
-      phone:
-        payload.phone,
-
-      buildingNumber:
-        payload.buildingNumber,
-
-      apartmentNumber:
-        payload.apartmentNumber,
-
-      deliverySlot:
-        payload.deliverySlot,
+      slot:
+        selectedSlot,
 
       status:
         "Active",
 
-      createdAt:
-        new Date().toISOString(),
+      phone,
 
-      total:
-        serverTotal,
+      userId,
 
       items:
-        payload.items.map(
+        cart.map(
           item => ({
-            ...item
+
+            id:
+              item.id,
+
+            name:
+              item.name,
+
+            qty:
+              item.qty,
+
+            price:
+              item.price
           })
         )
     };
 
     /*
-     * The create-order response is already confirmed by the server.
-     * Show this order immediately. A later background sync can still
-     * reconcile the list with Google Sheets.
+     * DO NOT add the order locally.
+     *
+     * Google Sheets is the source of truth.
      */
-
-    activeOrders = [
-      lastOrder
-    ];
-
-    saveOrders();
+    activeOrders = [];
 
     cart = [];
 
     saveCart();
 
-    updateCartBadges();
-
-    renderCart();
+    renderSuccess();
 
     show("success");
 
-    renderSuccess();
-
     /*
-     * Do not wait 1.5 seconds and then make another blocking
-     * request. The order is already available from the create
-     * response. Active Orders will reconcile in the background
-     * when the customer opens the page.
+     * Allow Apps Script enough time to write
+     * the order, then retrieve by USER ID.
      */
+    setTimeout(
+      syncCustomerOrders,
+      1500
+    );
 
   } catch (error) {
 
@@ -1986,18 +1832,17 @@ async function submitOrder() {
 
     toast(
       error.message ||
-      "Unable to place order."
+      "Unable to place order. Please try again."
     );
 
   } finally {
 
-    if (button) {
+    if (submitButton) {
 
-      button.disabled =
+      submitButton.disabled =
         false;
 
-      button.textContent =
-        button.dataset.originalText ||
+      submitButton.textContent =
         "Place order";
     }
   }
@@ -2005,46 +1850,66 @@ async function submitOrder() {
 
 
 /* =========================================================
-   SUCCESS PAGE
+   SUCCESS
 ========================================================= */
 
 function renderSuccess() {
 
   if (!lastOrder) {
-
     return;
   }
 
-  const id =
-    $("successOrderId");
+  if ($("orderRef")) {
 
-  if (id) {
+    $("orderRef").innerHTML = `
 
-    id.textContent =
-      lastOrder.orderId ||
-      "Order confirmed";
-  }
+      <strong>
+        Order ${esc(
+          lastOrder.orderId
+        )}
+      </strong>
 
-  const total =
-    $("successTotal");
+      <br>
 
-  if (total) {
-
-    total.textContent =
-      formatMoney(
+      ${money(
         lastOrder.total
-      ) +
-      " EGP";
+      )}
+
+    `;
   }
 
-  const slot =
-    $("successSlot");
+  if ($("cancelInfo")) {
 
-  if (slot) {
+    if (
+      isCancellationOpen()
+    ) {
 
-    slot.textContent =
-      lastOrder.deliverySlot ||
-      "";
+      $("cancelInfo").textContent =
+        "You can cancel this order before 10:00 PM.";
+
+    } else {
+
+      $("cancelInfo").textContent =
+        "Cancellation is closed after 10:00 PM.";
+    }
+  }
+
+  const cancelButton =
+    $("cancelOrderBtn");
+
+  if (cancelButton) {
+
+    cancelButton.style.display =
+      isCancellationOpen()
+        ? "block"
+        : "none";
+
+    cancelButton.onclick =
+      () =>
+        cancelActiveOrder(
+          lastOrder.orderId,
+          true
+        );
   }
 }
 
@@ -2055,584 +1920,401 @@ function renderSuccess() {
 
 async function syncCustomerOrders() {
 
+  if (
+    CONFIG.DEMO_MODE ||
+    !CONFIG.API_URL
+  ) {
+
+    return;
+  }
+
+  if (
+    !customer ||
+    !customer.phone
+  ) {
+
+    activeOrders = [];
+
+    renderOrders();
+
+    return;
+  }
+
+  /*
+   * Always derive the User ID from the
+   * current normalized phone.
+   */
   const userId =
     await ensureCustomerUserId();
 
   if (!userId) {
 
-    console.warn(
-      "Cannot sync orders: User ID is missing."
-    );
-
     activeOrders = [];
-
-    saveOrders();
 
     renderOrders();
 
-    return [];
+    return;
   }
-
-  console.log(
-    "Syncing orders for User ID:",
-    userId
-  );
 
   try {
 
-    const response =
-      await callGoogleScript(
-        {
-          action:
-            "orders",
+    /*
+     * IMPORTANT:
+     *
+     * There is NO phone parameter anymore.
+     *
+     * Orders are retrieved ONLY using userId.
+     */
+    const url =
+      CONFIG.API_URL +
+      "?action=orders&userId=" +
+      encodeURIComponent(
+        userId
+      ) +
+      "&_=" +
+      Date.now();
 
-          userId:
-            userId
-        },
+    console.log(
+      "Syncing orders for User ID:",
+      userId
+    );
+
+    const response =
+      await fetch(
+        url,
         {
-          timeout:
-            30000
+          method: "GET",
+          cache: "no-store",
+          redirect: "follow"
         }
       );
 
-    console.log(
-      "Orders API response:",
-      response
-    );
-
-    if (
-      !response ||
-      response.ok !== true
-    ) {
+    if (!response.ok) {
 
       throw new Error(
-        response &&
-        response.error
-          ? response.error
-          : "Unable to load orders."
+        `Orders request failed (${response.status})`
       );
     }
 
-    const orders =
+    const result =
+      await response.json();
+
+    console.log(
+      "Orders API response:",
+      result
+    );
+
+    if (!result.ok) {
+
+      throw new Error(
+        result.error ||
+        "Unable to load orders."
+      );
+    }
+
+    const serverOrders =
       Array.isArray(
-        response.orders
+        result.orders
       )
-        ? response.orders
+        ? result.orders
         : [];
 
     /*
-     * Google Sheets is the source of truth.
+     * SERVER IS THE ONLY SOURCE OF TRUTH.
      *
-     * IMPORTANT:
-     * Do NOT fall back to old local orders if the API returns
-     * an empty array.
+     * If Google Sheets says []:
+     * activeOrders becomes [].
      *
-     * If the sheet says there are zero active orders, there are
-     * zero active orders.
+     * No local orders are merged back in.
      */
-
     activeOrders =
-      orders.map(
-        normalizeOrder
-      );
+      serverOrders;
 
     saveOrders();
 
     renderOrders();
 
-    updateOrdersBadge();
-
-    return activeOrders;
-
   } catch (error) {
 
-    console.error(
-      "Sync customer orders error:",
+    console.warn(
+      "Order sync failed:",
       error
     );
 
     /*
-     * Keep the current displayed state on a temporary network
-     * failure rather than replacing it with an empty array.
+     * Do NOT resurrect local orders.
      */
+    activeOrders = [];
 
-    return activeOrders;
+    renderOrders();
   }
-}
-
-
-function normalizeOrder(
-  order
-) {
-
-  if (
-    !order ||
-    typeof order !== "object"
-  ) {
-
-    return null;
-  }
-
-  const items =
-    Array.isArray(
-      order.items
-    )
-      ? order.items
-      : [];
-
-  return {
-
-    ...order,
-
-    orderId:
-      cleanValue(
-        order.orderId ??
-        order.id ??
-        order["Order ID"]
-      ),
-
-    id:
-      cleanValue(
-        order.id ??
-        order.orderId ??
-        order["Order ID"]
-      ),
-
-    userId:
-      cleanValue(
-        order.userId ??
-        order["User ID"]
-      ),
-
-    name:
-      cleanValue(
-        order.name ??
-        order.Name
-      ),
-
-    phone:
-      normalizePhone(
-        order.phone ??
-        order.Phone
-      ),
-
-    buildingNumber:
-      cleanValue(
-        order.buildingNumber ??
-        order["Building Number"]
-      ),
-
-    apartmentNumber:
-      cleanValue(
-        order.apartmentNumber ??
-        order["Apartment Number"]
-      ),
-
-    address:
-      cleanValue(
-        order.address ??
-        order.Address
-      ),
-
-    deliverySlot:
-      cleanValue(
-        order.deliverySlot ??
-        order["Delivery Slot"]
-      ),
-
-    status:
-      cleanValue(
-        order.status ??
-        order.Status
-      ) ||
-      "Active",
-
-    total:
-      Number(
-        order.total ??
-        order.Total ??
-        0
-      ),
-
-    createdAt:
-      order.createdAt ??
-      order["Created At"] ??
-      "",
-
-    items:
-      items.map(
-        item => {
-
-          return {
-
-            ...item,
-
-            productId:
-              cleanValue(
-                item.productId ??
-                item.id ??
-                item["Product ID"]
-              ),
-
-            name:
-              cleanValue(
-                item.name ??
-                item.product ??
-                item.Product
-              ),
-
-            qty:
-              Number(
-                item.qty ??
-                item.quantity ??
-                item.Quantity ??
-                0
-              ),
-
-            quantity:
-              Number(
-                item.quantity ??
-                item.qty ??
-                item.Quantity ??
-                0
-              ),
-
-            price:
-              Number(
-                item.price ??
-                item["Unit Price"] ??
-                item.Price ??
-                0
-              ),
-
-            total:
-              Number(
-                item.total ??
-                item["Line Total"] ??
-                item.Total ??
-                0
-              )
-          };
-        }
-      )
-  };
 }
 
 
 function renderOrders() {
 
-  const container =
+  const list =
     $("ordersList");
 
-  if (!container) {
+  const empty =
+    $("noOrders");
 
-    updateOrdersBadge();
+  if (!list) {
+    return;
+  }
+
+  const active =
+    activeOrders.filter(
+      order =>
+        String(
+          order.status
+        ).toLowerCase() ===
+        "active"
+    );
+
+  updateOrdersBadge();
+
+  if (!active.length) {
+
+    list.innerHTML =
+      "";
+
+    if (empty) {
+
+      empty.style.display =
+        "block";
+    }
 
     return;
   }
 
-  const orders =
-    Array.isArray(
-      activeOrders
-    )
-      ? activeOrders.filter(
-          Boolean
-        )
-      : [];
+  if (empty) {
 
-  if (
-    orders.length === 0
-  ) {
-
-    container.innerHTML = `
-      <div
-        class="card"
-        style="
-          text-align:center;
-          padding:40px;
-        "
-      >
-
-        <div
-          style="
-            font-size:48px;
-          "
-        >
-          📦
-        </div>
-
-        <h3>
-          No active orders
-        </h3>
-
-        <p
-          class="muted"
-        >
-          Your confirmed orders will appear here.
-        </p>
-
-        <button
-          class="primary-btn"
-          id="orderFromEmpty"
-          onclick="goToMenuFromOrders()"
-        >
-          Order for tomorrow
-        </button>
-
-      </div>
-    `;
-
-    updateOrdersBadge();
-
-    return;
+    empty.style.display =
+      "none";
   }
 
-  container.innerHTML =
-    orders
+  list.innerHTML =
+    active
       .map(
-        order =>
-          renderOrderCard(
-            order
-          )
+        order => {
+
+          const items =
+            (
+              order.items ||
+              []
+            )
+              .map(
+                item => `
+
+                  <div class="order-item">
+
+                    <span>
+
+                      ${Number(
+                        item.qty ??
+                        item.quantity ??
+                        1
+                      )}
+
+                      ×
+
+                      ${esc(
+                        item.name ||
+                        item.product ||
+                        ""
+                      )}
+
+                    </span>
+
+                    <span>
+
+                      ${money(
+                        Number(
+                          item.qty ??
+                          item.quantity ??
+                          1
+                        ) *
+                        Number(
+                          item.price
+                        )
+                      )}
+
+                    </span>
+
+                  </div>
+
+                `
+              )
+              .join("");
+
+          const canCancel =
+            isCancellationOpen();
+
+          return `
+
+            <div class="order-card">
+
+              <div
+                class="order-card-head"
+              >
+
+                <div>
+
+                  <div
+                    class="order-number"
+                  >
+
+                    ${esc(
+                      order.orderId
+                    )}
+
+                  </div>
+
+                  <div
+                    class="order-date"
+                  >
+
+                    ${
+                      order.createdAt ||
+                      order.date
+                        ? formatDate(
+                            order.createdAt ||
+                            order.date
+                          )
+                        : "Order"
+                    }
+
+                  </div>
+
+                </div>
+
+                <div
+                  class="order-status"
+                >
+                  Active
+                </div>
+
+              </div>
+
+              ${items}
+
+              <div
+                class="order-total"
+              >
+
+                <span>
+                  Total
+                </span>
+
+                <span>
+                  ${money(
+                    order.total
+                  )}
+                </span>
+
+              </div>
+
+              <div
+                class="order-delivery"
+              >
+
+                🚚 Tomorrow ·
+
+                <strong>
+
+                  ${esc(
+                    order.deliverySlot ||
+                    order.slot ||
+                    ""
+                  )}
+
+                </strong>
+
+              </div>
+
+              ${
+                canCancel
+                  ? `
+
+                    <button
+                      class="cancel-order-button"
+                      type="button"
+                      data-order-id="${esc(
+                        order.orderId
+                      )}"
+                    >
+                      Cancel order
+                    </button>
+
+                  `
+                  : `
+
+                    <div
+                      class="cancel-closed"
+                    >
+                      🔒 Cancellation closed
+                      at 10:00 PM
+                    </div>
+
+                  `
+              }
+
+            </div>
+
+          `;
+        }
       )
       .join("");
 
-  updateOrdersBadge();
+  list
+    .querySelectorAll(
+      ".cancel-order-button"
+    )
+    .forEach(
+      button => {
+
+        button.onclick =
+          () =>
+            cancelActiveOrder(
+              button.dataset
+                .orderId
+            );
+      }
+    );
 }
 
 
-function renderOrderCard(
-  order
-) {
+function formatDate(value) {
 
-  const orderId =
-    cleanValue(
-      order.orderId ||
-      order.id
-    );
+  if (!value) {
+    return "";
+  }
 
-  const status =
-    cleanValue(
-      order.status
-    ) ||
-    "Active";
+  const date =
+    new Date(value);
 
-  const items =
-    Array.isArray(
-      order.items
+  if (
+    Number.isNaN(
+      date.getTime()
     )
-      ? order.items
-      : [];
+  ) {
 
-  const itemsHtml =
-    items.length
-      ? items
-          .map(
-            item => {
-
-              const qty =
-                Number(
-                  item.qty ??
-                  item.quantity ??
-                  0
-                );
-
-              const lineTotal =
-                Number(
-                  item.total ??
-                  (
-                    Number(
-                      item.price || 0
-                    ) *
-                    qty
-                  )
-                );
-
-              return `
-                <div
-                  class="order-item-row"
-                >
-
-                  <span>
-                    ${qty}
-                    ×
-                    ${escapeHtml(
-                      item.name || ""
-                    )}
-                  </span>
-
-                  <span>
-                    ${formatMoney(
-                      lineTotal
-                    )}
-                    EGP
-                  </span>
-
-                </div>
-              `;
-            }
-          )
-          .join("")
-      : `
-        <div
-          class="muted"
-        >
-          Order details unavailable.
-        </div>
-      `;
-
-  const created =
-    formatOrderDate(
-      order.createdAt
+    return String(
+      value
     );
+  }
 
-  const delivery =
-    cleanValue(
-      order.deliverySlot
-    );
-
-  const statusClass =
-    status.toLowerCase() ===
-    "active"
-      ? "active"
-      : "inactive";
-
-  return `
-    <div
-      class="card order-card"
-    >
-
-      <div
-        class="order-card-header"
-      >
-
-        <div>
-
-          <h3>
-            ${escapeHtml(
-              orderId
-            )}
-          </h3>
-
-          <div
-            class="muted"
-          >
-            ${
-              created
-                ? "Placed " +
-                  escapeHtml(
-                    created
-                  )
-                : "Order"
-            }
-          </div>
-
-        </div>
-
-        <span
-          class="status-badge ${statusClass}"
-        >
-          ${escapeHtml(
-            status.toUpperCase()
-          )}
-        </span>
-
-      </div>
-
-      <div
-        class="order-items"
-      >
-        ${itemsHtml}
-      </div>
-
-      <div
-        class="order-total-row"
-      >
-
-        <strong>
-          Total
-        </strong>
-
-        <strong>
-          ${formatMoney(
-            Number(
-              order.total || 0
-            )
-          )}
-          EGP
-        </strong>
-
-      </div>
-
-      ${
-        delivery
-          ? `
-            <div
-              class="delivery-slot"
-            >
-              🚚
-              ${escapeHtml(
-                delivery
-              )}
-            </div>
-          `
-          : ""
+  return (
+    "Placed " +
+    date.toLocaleDateString(
+      "en-EG",
+      {
+        day: "numeric",
+        month: "short",
+        year: "numeric"
       }
-
-      ${
-        status.toLowerCase() ===
-        "active"
-          ? `
-            <button
-              class="cancel-order-btn"
-              onclick="cancelOrder('${escapeJs(
-                orderId
-              )}')"
-            >
-              Cancel order
-            </button>
-          `
-          : ""
-      }
-
-    </div>
-  `;
-}
-
-
-function updateOrdersBadge() {
-
-  const count =
-    Array.isArray(
-      activeOrders
     )
-      ? activeOrders.filter(
-          order =>
-            order &&
-            String(
-              order.status || ""
-            ).toLowerCase() ===
-            "active"
-        ).length
-      : 0;
-
-  const badges =
-    [
-      $("ordersCount"),
-      $("orderCount")
-    ];
-
-  badges.forEach(
-    badge => {
-
-      if (!badge) {
-
-        return;
-      }
-
-      badge.textContent =
-        String(count);
-    }
   );
 }
 
@@ -2641,19 +2323,37 @@ function updateOrdersBadge() {
    CANCEL ORDER
 ========================================================= */
 
-async function cancelOrder(
-  orderId
+async function cancelActiveOrder(
+  orderId,
+  fromSuccess = false
 ) {
 
-  const target =
-    cleanValue(
-      orderId
-    );
-
-  if (!target) {
+  if (
+    !isCancellationOpen()
+  ) {
 
     toast(
-      "Invalid order."
+      "Orders can only be cancelled before 10 PM."
+    );
+
+    return;
+  }
+
+  const order =
+    activeOrders.find(
+      item =>
+        String(
+          item.orderId
+        ) ===
+        String(
+          orderId
+        )
+    );
+
+  if (!order) {
+
+    toast(
+      "Order not found."
     );
 
     return;
@@ -2665,90 +2365,117 @@ async function cancelOrder(
     );
 
   if (!confirmed) {
-
     return;
   }
-
-  /*
-   * Optimistically remove the order from the UI.
-   *
-   * The backend remains the source of truth.
-   */
-
-  const previousOrders =
-    activeOrders.slice();
-
-  activeOrders =
-    activeOrders.filter(
-      order =>
-        cleanValue(
-          order.orderId ||
-          order.id
-        ) !==
-        target
-    );
-
-  saveOrders();
-
-  renderOrders();
-
-  updateOrdersBadge();
 
   try {
 
     const userId =
       await ensureCustomerUserId();
 
+    if (!userId) {
+
+      throw new Error(
+        "Customer User ID is missing."
+      );
+    }
+
     const response =
-      await postToGoogleScript(
+      await fetch(
+        CONFIG.API_URL,
         {
-          action:
-            "cancelOrder",
+          method: "POST",
 
-          orderId:
-            target,
+          headers: {
+            "Content-Type":
+              "text/plain;charset=utf-8"
+          },
 
-          userId:
-            userId
-        },
-        {
-          timeout:
-            30000
+          body:
+            JSON.stringify({
+
+              action:
+                "cancelOrder",
+
+              orderId:
+                order.orderId,
+
+              /*
+               * Cancellation is now performed
+               * using User ID, NOT phone.
+               */
+              userId
+            })
         }
       );
 
-    console.log(
-      "Cancel order response:",
-      response
-    );
-
-    if (
-      !response ||
-      response.ok !== true
-    ) {
+    if (!response.ok) {
 
       throw new Error(
-        response &&
-        response.error
-          ? response.error
-          : "Unable to cancel order."
+        `Cancellation failed (${response.status})`
+      );
+    }
+
+    const result =
+      await response.json();
+
+    if (!result.ok) {
+
+      throw new Error(
+        result.error ||
+        "Unable to cancel order."
       );
     }
 
     /*
-     * The backend is now the source of truth.
-     * Refresh once in the background to verify the cancellation.
+     * Remove from current in-memory state.
+     * Nothing is written to localStorage.
      */
+    activeOrders =
+      activeOrders.filter(
+        item =>
+          String(
+            item.orderId
+          ) !==
+          String(
+            orderId
+          )
+      );
 
-    syncCustomerOrders().catch(
-      error => {
+    saveOrders();
 
-        console.warn(
-          "Post-cancellation sync failed:",
-          error
-        );
+    if (
+      lastOrder &&
+      String(
+        lastOrder.orderId
+      ) ===
+      String(
+        orderId
+      )
+    ) {
+
+      lastOrder.status =
+        "Cancelled";
+    }
+
+    if (fromSuccess) {
+
+      if ($("cancelOrderBtn")) {
+
+        $("cancelOrderBtn").style.display =
+          "none";
       }
-    );
+
+      if ($("cancelInfo")) {
+
+        $("cancelInfo").textContent =
+          "Your order has been cancelled.";
+      }
+
+    } else {
+
+      renderOrders();
+    }
 
     toast(
       "Order cancelled successfully."
@@ -2760,20 +2487,6 @@ async function cancelOrder(
       "Cancel order error:",
       error
     );
-
-    /*
-     * Restore the previous UI state if the cancellation
-     * request itself failed.
-     */
-
-    activeOrders =
-      previousOrders;
-
-    saveOrders();
-
-    renderOrders();
-
-    updateOrdersBadge();
 
     toast(
       error.message ||
@@ -2797,9 +2510,7 @@ function setupNavigation() {
     logo.onclick =
       () => {
 
-        show(
-          "home"
-        );
+        show("home");
       };
   }
 
@@ -2811,15 +2522,12 @@ function setupNavigation() {
     start.onclick =
       async () => {
 
-        show(
-          "menu"
-        );
+        show("menu");
 
-        if (
-          !products.length
-        ) {
+        if (!products.length) {
 
           $("products").innerHTML = `
+
             <div
               class="card"
               style="
@@ -2830,9 +2538,7 @@ function setupNavigation() {
             >
 
               <div
-                style="
-                  font-size:38px
-                "
+                style="font-size:38px"
               >
                 🥖
               </div>
@@ -2842,6 +2548,7 @@ function setupNavigation() {
               </h3>
 
             </div>
+
           `;
 
           await loadProducts();
@@ -2900,9 +2607,7 @@ function setupNavigation() {
     checkout.onclick =
       () => {
 
-        if (
-          !cart.length
-        ) {
+        if (!cart.length) {
 
           toast(
             "Your cart is empty."
@@ -2918,9 +2623,7 @@ function setupNavigation() {
 
         renderCheckout();
 
-        show(
-          "checkout"
-        );
+        show("checkout");
       };
   }
 
@@ -2932,9 +2635,7 @@ function setupNavigation() {
     back.onclick =
       () => {
 
-        show(
-          "menu"
-        );
+        show("menu");
 
         renderCats();
         renderProducts();
@@ -2947,29 +2648,13 @@ function setupNavigation() {
   if (ordersButton) {
 
     ordersButton.onclick =
-      () => {
+      async () => {
 
-        show(
-          "orders"
-        );
-
-        /*
-         * Show the current in-memory/server-confirmed state
-         * immediately. Reconcile with Google Sheets in the
-         * background instead of blocking the page.
-         */
+        show("orders");
 
         renderOrders();
 
-        syncCustomerOrders().catch(
-          error => {
-
-            console.warn(
-              "Background order sync failed:",
-              error
-            );
-          }
-        );
+        await syncCustomerOrders();
       };
   }
 
@@ -2981,9 +2666,7 @@ function setupNavigation() {
     ordersBack.onclick =
       () => {
 
-        show(
-          "home"
-        );
+        show("home");
       };
   }
 
@@ -2995,13 +2678,9 @@ function setupNavigation() {
     orderEmpty.onclick =
       async () => {
 
-        show(
-          "menu"
-        );
+        show("menu");
 
-        if (
-          !products.length
-        ) {
+        if (!products.length) {
 
           await loadProducts();
         }
@@ -3019,13 +2698,9 @@ function setupNavigation() {
     again.onclick =
       async () => {
 
-        show(
-          "menu"
-        );
+        show("menu");
 
-        if (
-          !products.length
-        ) {
+        if (!products.length) {
 
           await loadProducts();
         }
@@ -3034,24 +2709,22 @@ function setupNavigation() {
         renderProducts();
       };
   }
-}
 
+  const viewOrders =
+    $("viewOrdersAfterSuccess");
 
-function goToMenuFromOrders() {
+  if (viewOrders) {
 
-  show(
-    "menu"
-  );
+    viewOrders.onclick =
+      async () => {
 
-  if (
-    !products.length
-  ) {
+        show("orders");
 
-    loadProducts();
+        renderOrders();
+
+        await syncCustomerOrders();
+      };
   }
-
-  renderCats();
-  renderProducts();
 }
 
 
@@ -3065,451 +2738,23 @@ function setupCheckoutForm() {
     $("checkoutForm");
 
   if (!form) {
-
     return;
   }
 
   form.addEventListener(
     "submit",
-    event => {
+    async event => {
 
       event.preventDefault();
 
-      submitOrder();
-    }
-  );
-
-  setupDeliverySlots();
-}
-
-
-/* =========================================================
-   INSTALL PROMPT
-========================================================= */
-
-let deferredInstallPrompt =
-  null;
-
-
-function setupInstallPrompt() {
-
-  window.addEventListener(
-    "beforeinstallprompt",
-    event => {
-
-      event.preventDefault();
-
-      deferredInstallPrompt =
-        event;
-
-      const button =
-        $("installBtn");
-
-      if (button) {
-
-        button.style.display =
-          "block";
-
-        button.onclick =
-          async () => {
-
-            if (
-              !deferredInstallPrompt
-            ) {
-
-              return;
-            }
-
-            deferredInstallPrompt
-              .prompt();
-
-            await deferredInstallPrompt
-              .userChoice;
-
-            deferredInstallPrompt =
-              null;
-
-            button.style.display =
-              "none";
-          };
-      }
+      await createOrder();
     }
   );
 }
 
 
 /* =========================================================
-   VIEW MANAGEMENT
-========================================================= */
-
-function show(
-  view
-) {
-
-  currentView =
-    view;
-
-  const views =
-    [
-      "home",
-      "menu",
-      "checkout",
-      "success",
-      "orders"
-    ];
-
-  views.forEach(
-    name => {
-
-      const element =
-        $(
-          name +
-          "View"
-        );
-
-      if (!element) {
-
-        return;
-      }
-
-      if (
-        name ===
-        view
-      ) {
-
-        element.style.display =
-          "";
-
-      } else {
-
-        element.style.display =
-          "none";
-      }
-    }
-  );
-
-  window.scrollTo(
-    {
-      top: 0,
-      behavior: "instant"
-    }
-  );
-
-  if (
-    view ===
-    "menu"
-  ) {
-
-    renderCats();
-    renderProducts();
-  }
-
-  if (
-    view ===
-    "checkout"
-  ) {
-
-    renderCheckout();
-  }
-
-  if (
-    view ===
-    "orders"
-  ) {
-
-    renderOrders();
-  }
-}
-
-
-/* =========================================================
-   TOAST
-========================================================= */
-
-function toast(
-  message
-) {
-
-  const existing =
-    document.querySelector(
-      ".toast"
-    );
-
-  if (existing) {
-
-    existing.remove();
-  }
-
-  const element =
-    document.createElement(
-      "div"
-    );
-
-  element.className =
-    "toast";
-
-  element.textContent =
-    message;
-
-  document.body.appendChild(
-    element
-  );
-
-  requestAnimationFrame(
-    () => {
-
-      element.classList.add(
-        "show"
-      );
-    }
-  );
-
-  setTimeout(
-    () => {
-
-      element.classList.remove(
-        "show"
-      );
-
-      setTimeout(
-        () => {
-
-          element.remove();
-
-        },
-        250
-      );
-
-    },
-    3000
-  );
-}
-
-
-/* =========================================================
-   FORMATTING
-========================================================= */
-
-function formatMoney(
-  value
-) {
-
-  const number =
-    Number(value || 0);
-
-  return number.toLocaleString(
-    "en-US",
-    {
-      maximumFractionDigits:
-        2
-    }
-  );
-}
-
-
-function formatOrderDate(
-  value
-) {
-
-  if (!value) {
-
-    return "";
-  }
-
-  const date =
-    new Date(
-      value
-    );
-
-  if (
-    Number.isNaN(
-      date.getTime()
-    )
-  ) {
-
-    return cleanValue(
-      value
-    );
-  }
-
-  return date.toLocaleDateString(
-    "en-US",
-    {
-      month:
-        "short",
-
-      day:
-        "numeric",
-
-      year:
-        "numeric"
-    }
-  );
-}
-
-
-/* =========================================================
-   ESCAPING
-========================================================= */
-
-function escapeHtml(
-  value
-) {
-
-  return cleanValue(
-    value
-  )
-    .replace(
-      /&/g,
-      "&amp;"
-    )
-    .replace(
-      /</g,
-      "&lt;"
-    )
-    .replace(
-      />/g,
-      "&gt;"
-    )
-    .replace(
-      /"/g,
-      "&quot;"
-    )
-    .replace(
-      /'/g,
-      "&#039;"
-    );
-}
-
-
-function escapeJs(
-  value
-) {
-
-  return cleanValue(
-    value
-  )
-    .replace(
-      /\\/g,
-      "\\\\"
-    )
-    .replace(
-      /'/g,
-      "\\'"
-    )
-    .replace(
-      /"/g,
-      '\\"'
-    )
-    .replace(
-      /\n/g,
-      "\\n"
-    )
-    .replace(
-      /\r/g,
-      "\\r"
-    );
-}
-
-
-/* =========================================================
-   CUSTOMER PROFILE
-========================================================= */
-
-function loadSavedCustomer() {
-
-  const saved =
-    loadCustomer();
-
-  if (
-    saved &&
-    typeof saved ===
-      "object"
-  ) {
-
-    customer =
-      saved;
-
-    /*
-     * Normalize old stored phone numbers.
-     */
-
-    if (
-      customer.phone
-    ) {
-
-      customer.phone =
-        normalizePhone(
-          customer.phone
-        );
-    }
-
-    /*
-     * Restore User ID.
-     */
-
-    if (
-      !customer.userId
-    ) {
-
-      const stored =
-        getStoredUserId();
-
-      if (stored) {
-
-        customer.userId =
-          stored;
-      }
-    }
-
-    saveCustomer();
-
-    return customer;
-  }
-
-  customer =
-    null;
-
-  return null;
-}
-
-
-function clearCustomerLocalData() {
-
-  customer =
-    null;
-
-  activeOrders =
-    [];
-
-  try {
-
-    localStorage.removeItem(
-      STORAGE_KEYS.customer
-    );
-
-    localStorage.removeItem(
-      STORAGE_KEYS.userId
-    );
-
-    localStorage.removeItem(
-      STORAGE_KEYS.orders
-    );
-
-  } catch (error) {
-
-    console.warn(
-      "Unable to clear customer data:",
-      error
-    );
-  }
-
-  updateOrdersBadge();
-}
-
-
-/* =========================================================
-   INIT
+   STARTUP
 ========================================================= */
 
 async function init() {
@@ -3519,20 +2764,45 @@ async function init() {
   );
 
   /*
-   * Load local state immediately.
-   *
-   * These values are only used to make the UI responsive.
-   * Google Sheets remains the source of truth for orders.
+   * Normalize old customer data.
    */
+  normalizeStoredCustomer();
 
-  customer =
-    loadSavedCustomer();
+  /*
+   * Completely remove old order-cache system.
+   */
+  localStorage.removeItem(
+    "mb_active_orders"
+  );
 
-  cart =
-    loadCart();
+  activeOrders = [];
 
-  activeOrders =
-    loadOrders();
+  /*
+   * If the customer already exists,
+   * generate their User ID immediately.
+   */
+  if (
+    customer &&
+    customer.phone
+  ) {
+
+    try {
+
+      await ensureCustomerUserId();
+
+      console.log(
+        "Customer User ID:",
+        customer.userId
+      );
+
+    } catch (error) {
+
+      console.warn(
+        "Unable to generate User ID:",
+        error
+      );
+    }
+  }
 
   updateCartBadges();
   updateOrdersBadge();
@@ -3545,42 +2815,14 @@ async function init() {
   renderOrders();
 
   /*
-   * Load products in the background.
-   *
-   * This prevents the entire app startup from waiting on
-   * Google Apps Script.
+   * Retrieve active orders ONLY by User ID.
    */
-
-  loadProducts().catch(
-    error => {
-
-      console.warn(
-        "Background product load failed:",
-        error
-      );
-    }
-  );
-
-  /*
-   * Retrieve active orders ONLY by User ID, but do it in the
-   * background so the app does not wait for Google Apps Script
-   * before becoming usable.
-   */
-
   if (
     customer &&
     customer.userId
   ) {
 
-    syncCustomerOrders().catch(
-      error => {
-
-        console.warn(
-          "Startup order sync failed:",
-          error
-        );
-      }
-    );
+    await syncCustomerOrders();
   }
 
   console.log(
@@ -3601,7 +2843,6 @@ if (
   document.addEventListener(
     "DOMContentLoaded",
     () => {
-
       init();
     }
   );
@@ -3610,4 +2851,3 @@ if (
 
   init();
 }
-  
