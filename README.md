@@ -59,3 +59,18 @@ exception stopped JavaScript initialization before `loadProducts()` ran,
 which is why the menu was blank.
 
 v11 adds the missing clickable logo and makes the navigation bindings defensive.
+
+
+## Delivery fee — v12
+
+A fixed **5 EGP delivery fee** is now added to every order.
+
+The fee is applied in both places:
+
+- Frontend checkout displays:
+  - Subtotal
+  - Delivery: 5 EGP
+  - Total
+- Google Apps Script calculates the 5 EGP fee server-side, so the final amount saved in `Orders.Total` cannot be bypassed by changing the frontend.
+
+`OrderItems` continue to contain only the actual product lines. The 5 EGP delivery fee is an order-level charge and is not added as a fake product.
