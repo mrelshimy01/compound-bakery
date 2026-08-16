@@ -12,10 +12,8 @@ const CONFIG = {
   DELIVERY_FEE: 5,
 
   DELIVERY_SLOTS: [
-    "8:00–10:00 AM",
-    "10:00 AM–12:00 PM",
-    "12:00–2:00 PM",
-    "2:00–4:00 PM"
+    "10:00 – 12:00 AM",
+    "8:00 – 10:00 PM"
   ]
 };
 
