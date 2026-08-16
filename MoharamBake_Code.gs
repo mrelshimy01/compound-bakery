@@ -93,6 +93,12 @@ const CONFIG = {
   CANCELLED_STATUS:
     "Cancelled",
 
+  /*
+   * Fixed delivery fee added to every order's total at checkout.
+   */
+  DELIVERY_FEE:
+    5,
+
   USER_ID_PREFIX:
     "MBU-",
 
@@ -108,11 +114,25 @@ const CONFIG = {
    BASIC HELPERS
 ========================================================= */
 
+/*
+ * Memoized per execution. SpreadsheetApp.openById() is a real network
+ * round trip (often 300-800ms on its own) - the old code called this
+ * indirectly 5-10+ times per request (once per getSheet() call). We
+ * only ever need it once per execution.
+ */
+var _CACHED_SPREADSHEET_ = null;
+
 function getSpreadsheet() {
 
-  return SpreadsheetApp.openById(
-    CONFIG.SPREADSHEET_ID
-  );
+  if (!_CACHED_SPREADSHEET_) {
+
+    _CACHED_SPREADSHEET_ =
+      SpreadsheetApp.openById(
+        CONFIG.SPREADSHEET_ID
+      );
+  }
+
+  return _CACHED_SPREADSHEET_;
 }
 
 
@@ -269,6 +289,77 @@ function ensureHeader(
     );
 
   return newColumn - 1;
+}
+
+
+/*
+ * Looks up several header names on a sheet in a SINGLE round trip,
+ * instead of calling ensureHeader() once per column (each of which
+ * was its own separate getHeaders() API call - the old createOrder/
+ * upsertCustomer/saveOrderItems chained 5-10 of these back to back,
+ * which alone accounted for several seconds of order-placing time).
+ *
+ * Any header that's genuinely missing gets appended in one batched
+ * write. Returns { "Header Name": columnIndex, ... } (0-based).
+ */
+function getHeaderIndexes(
+  sheet,
+  requiredHeaders
+) {
+
+  let headers =
+    getHeaders(
+      sheet
+    );
+
+  const missing =
+    requiredHeaders.filter(
+      function(name) {
+
+        return (
+          findColumn(
+            headers,
+            [name]
+          ) < 0
+        );
+      }
+    );
+
+  if (missing.length) {
+
+    sheet
+      .getRange(
+        1,
+        headers.length + 1,
+        1,
+        missing.length
+      )
+      .setValues([
+        missing
+      ]);
+
+    headers =
+      headers.concat(
+        missing
+      );
+  }
+
+  const map = {};
+
+  requiredHeaders.forEach(
+    function(name) {
+
+      map[name] =
+        findColumn(
+          headers,
+          [name]
+        );
+    }
+  );
+
+  map._headers = headers;
+
+  return map;
 }
 
 
@@ -596,7 +687,26 @@ function generateUserId(phone) {
    SYSTEM SETUP
 ========================================================= */
 
+/*
+ * setupSystem() creates sheets/headers that, once they exist, never
+ * need to be checked again. The old code re-verified everything
+ * (15-20+ Sheets API calls) on EVERY request. We now check a single
+ * fast script property first and skip straight out if setup already
+ * ran. Bump SETUP_VERSION if you add new required columns later.
+ */
+var SETUP_VERSION = "v1";
+
 function setupSystem() {
+
+  const props =
+    PropertiesService.getScriptProperties();
+
+  if (
+    props.getProperty("setupVersion") ===
+    SETUP_VERSION
+  ) {
+    return;
+  }
 
   const spreadsheet =
     getSpreadsheet();
@@ -718,6 +828,11 @@ function setupSystem() {
 
 
   SpreadsheetApp.flush();
+
+  props.setProperty(
+    "setupVersion",
+    SETUP_VERSION
+  );
 }
 
 
@@ -1906,6 +2021,40 @@ function cleanupInactiveOrderItems() {
    PRODUCTS
 ========================================================= */
 
+/*
+ * Products change rarely (edited by hand in the sheet), so we share
+ * one 5-minute CacheService cache between the "products" endpoint
+ * and createOrder's price lookup - avoids a full Products-sheet
+ * read on every single order placed.
+ */
+function getProductsCached() {
+
+  const cache =
+    CacheService.getScriptCache();
+
+  const cached =
+    cache.get("products_v1");
+
+  if (cached) {
+
+    return JSON.parse(
+      cached
+    );
+  }
+
+  const result =
+    getProducts();
+
+  cache.put(
+    "products_v1",
+    JSON.stringify(result),
+    300
+  );
+
+  return result;
+}
+
+
 function getProducts() {
 
   const sheet =
@@ -2049,7 +2198,10 @@ function getProducts() {
     ok: true,
 
     products:
-      products
+      products,
+
+    deliveryFee:
+      CONFIG.DELIVERY_FEE
   };
 }
 
@@ -2096,36 +2248,23 @@ function upsertCustomer(
       CONFIG.SHEETS.CUSTOMERS
     );
 
-
-  const nameIndex =
-    ensureHeader(
+  const idx =
+    getHeaderIndexes(
       sheet,
-      "Name"
+      [
+        "Name",
+        "Phone",
+        "Address",
+        "Updated At",
+        "User ID"
+      ]
     );
 
-  const phoneIndex =
-    ensureHeader(
-      sheet,
-      "Phone"
-    );
-
-  const addressIndex =
-    ensureHeader(
-      sheet,
-      "Address"
-    );
-
-  const updatedIndex =
-    ensureHeader(
-      sheet,
-      "Updated At"
-    );
-
-  const userIdIndex =
-    ensureHeader(
-      sheet,
-      "User ID"
-    );
+  const nameIndex = idx["Name"];
+  const phoneIndex = idx["Phone"];
+  const addressIndex = idx["Address"];
+  const updatedIndex = idx["Updated At"];
+  const userIdIndex = idx["User ID"];
 
 
   const phone =
@@ -2212,62 +2351,61 @@ function upsertCustomer(
     new Date();
 
 
+  const columnCount =
+    data.headers.length;
+
+
   if (
     existingRow !== -1
   ) {
 
-    sheet
-      .getRange(
-        existingRow,
-        nameIndex + 1
-      )
-      .setValue(
-        customer.name ||
-        ""
-      );
+    /*
+     * One batched write for the whole row instead of 5
+     * separate .getRange().setValue() round trips.
+     */
+    const updatedRow =
+      data.rows[existingRow - 2]
+        .slice();
 
+    while (
+      updatedRow.length <
+      columnCount
+    ) {
+      updatedRow.push("");
+    }
+
+    updatedRow[nameIndex] =
+      customer.name || "";
+
+    updatedRow[phoneIndex] =
+      phone;
+
+    updatedRow[addressIndex] =
+      customer.address || "";
+
+    updatedRow[updatedIndex] =
+      now;
+
+    updatedRow[userIdIndex] =
+      userId;
 
     sheet
       .getRange(
         existingRow,
         phoneIndex + 1
       )
-      .setNumberFormat("@")
-      .setValue(
-        phone
-      );
-
+      .setNumberFormat("@");
 
     sheet
       .getRange(
         existingRow,
-        addressIndex + 1
+        1,
+        1,
+        columnCount
       )
-      .setValue(
-        customer.address ||
-        ""
-      );
-
-
-    sheet
-      .getRange(
-        existingRow,
-        updatedIndex + 1
-      )
-      .setValue(
-        now
-      );
-
-
-    sheet
-      .getRange(
-        existingRow,
-        userIdIndex + 1
-      )
-      .setValue(
-        userId
-      );
-
+      .setValues([
+        updatedRow
+      ]);
 
     SpreadsheetApp.flush();
 
@@ -2276,9 +2414,7 @@ function upsertCustomer(
 
 
   const headers =
-    getHeaders(
-      sheet
-    );
+    data.headers;
 
 
   const row =
@@ -2457,7 +2593,7 @@ function createOrder(
 
 
   const productsResponse =
-    getProducts();
+    getProductsCached();
 
 
   const products =
@@ -2597,6 +2733,17 @@ function createOrder(
   );
 
 
+  const itemsTotal =
+    orderTotal;
+
+
+  /*
+   * Fixed delivery fee, added once per order.
+   */
+  orderTotal +=
+    CONFIG.DELIVERY_FEE;
+
+
   const lock =
     LockService
       .getScriptLock();
@@ -2619,80 +2766,37 @@ function createOrder(
       generateOrderId();
 
 
-    const orderIdIndex =
-      ensureHeader(
+    const idx =
+      getHeaderIndexes(
         ordersSheet,
-        "Order ID"
+        [
+          "Order ID",
+          "Created At",
+          "Name",
+          "Phone",
+          "Address",
+          "Delivery Slot",
+          "Total",
+          "Status",
+          "Update",
+          "User ID"
+        ]
       );
 
-
-    const createdIndex =
-      ensureHeader(
-        ordersSheet,
-        "Created At"
-      );
-
-
-    const nameIndex =
-      ensureHeader(
-        ordersSheet,
-        "Name"
-      );
-
-
-    const phoneIndex =
-      ensureHeader(
-        ordersSheet,
-        "Phone"
-      );
-
-
-    const addressIndex =
-      ensureHeader(
-        ordersSheet,
-        "Address"
-      );
-
-
-    const slotIndex =
-      ensureHeader(
-        ordersSheet,
-        "Delivery Slot"
-      );
-
-
-    const totalIndex =
-      ensureHeader(
-        ordersSheet,
-        "Total"
-      );
-
-
-    const statusIndex =
-      ensureHeader(
-        ordersSheet,
-        "Status"
-      );
-
-
-    const updateIndex =
-      ensureHeader(
-        ordersSheet,
-        "Update"
-      );
-
-
-    const userIdIndex =
-      ensureHeader(
-        ordersSheet,
-        "User ID"
-      );
+    const orderIdIndex = idx["Order ID"];
+    const createdIndex = idx["Created At"];
+    const nameIndex = idx["Name"];
+    const phoneIndex = idx["Phone"];
+    const addressIndex = idx["Address"];
+    const slotIndex = idx["Delivery Slot"];
+    const totalIndex = idx["Total"];
+    const statusIndex = idx["Status"];
+    const updateIndex = idx["Update"];
+    const userIdIndex = idx["User ID"];
 
 
     const headers =
-      getHeaders(
-        ordersSheet
-      );
+      idx._headers;
 
 
     const row =
@@ -2793,6 +2897,12 @@ function createOrder(
       phone:
         phone,
 
+      itemsTotal:
+        itemsTotal,
+
+      deliveryFee:
+        CONFIG.DELIVERY_FEE,
+
       total:
         orderTotal,
 
@@ -2878,62 +2988,31 @@ function saveOrderItems(
     );
 
 
-  const orderIdIndex =
-    ensureHeader(
+  const idx =
+    getHeaderIndexes(
       sheet,
-      "Order ID"
+      [
+        "Order ID",
+        "Product ID",
+        "Product",
+        "Price",
+        "Quantity",
+        "Total",
+        "Status"
+      ]
     );
 
-
-  const productIdIndex =
-    ensureHeader(
-      sheet,
-      "Product ID"
-    );
-
-
-  const productIndex =
-    ensureHeader(
-      sheet,
-      "Product"
-    );
-
-
-  const priceIndex =
-    ensureHeader(
-      sheet,
-      "Price"
-    );
-
-
-  const quantityIndex =
-    ensureHeader(
-      sheet,
-      "Quantity"
-    );
-
-
-  const totalIndex =
-    ensureHeader(
-      sheet,
-      "Total"
-    );
-
-
-  /*
-   * IMPORTANT NEW COLUMN.
-   */
-  const statusIndex =
-    ensureHeader(
-      sheet,
-      "Status"
-    );
+  const orderIdIndex = idx["Order ID"];
+  const productIdIndex = idx["Product ID"];
+  const productIndex = idx["Product"];
+  const priceIndex = idx["Price"];
+  const quantityIndex = idx["Quantity"];
+  const totalIndex = idx["Total"];
+  const statusIndex = idx["Status"];
 
 
   const headers =
-    getHeaders(
-      sheet
-    );
+    idx._headers;
 
 
   const itemStatus =
@@ -4253,7 +4332,27 @@ function deduplicateCustomers() {
    RUN USER ID MIGRATION
 ========================================================= */
 
+/*
+ * This is a one-time data migration (backfilling User ID / normalized
+ * phone columns onto existing rows), not something new orders need.
+ * The old code ran it - full sheet scan, one write call per row - on
+ * every "orders" load and every "createOrder". Now it runs once and
+ * remembers via a script property. To force it to run again (e.g.
+ * after manually editing the sheet), delete the "userIdMigrationDone"
+ * script property, or call repairUserData()/initializeSystem()
+ * directly from the Apps Script editor.
+ */
 function runUserIdMigration() {
+
+  const props =
+    PropertiesService.getScriptProperties();
+
+  if (
+    props.getProperty("userIdMigrationDone") ===
+    "true"
+  ) {
+    return;
+  }
 
   migrateCustomers();
 
@@ -4262,6 +4361,11 @@ function runUserIdMigration() {
   deduplicateCustomers();
 
   SpreadsheetApp.flush();
+
+  props.setProperty(
+    "userIdMigrationDone",
+    "true"
+  );
 }
 
 
@@ -4446,8 +4550,14 @@ function doGet(e) {
 
       setupSystem();
 
+      /*
+       * Products change rarely (you edit them by hand in the sheet).
+       * getProductsCached() shares one 5-minute cache with
+       * createOrder, so repeat app loads and order placement don't
+       * hit the Sheets API for this at all.
+       */
       return jsonResponse(
-        getProducts()
+        getProductsCached()
       );
     }
 
