@@ -59,3 +59,11 @@ exception stopped JavaScript initialization before `loadProducts()` ran,
 which is why the menu was blank.
 
 v11 adds the missing clickable logo and makes the navigation bindings defensive.
+
+
+## Minimal 5 EGP delivery fee update
+The only pricing change is an order-level 5 EGP delivery fee:
+- Checkout displays Subtotal + Delivery + Total.
+- Backend adds exactly 5 EGP to Orders.Total.
+- OrderItems and their line totals are unchanged.
+- Active Orders uses the backend/sheet Total, so it reflects the same final amount.
