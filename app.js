@@ -4,6 +4,13 @@ const CONFIG = {
 
   DEMO_MODE: false,
 
+  /*
+   * Fallback only - the live value comes from the backend's
+   * "products" response (deliveryFee) and overwrites this once
+   * products load, so the two never drift out of sync.
+   */
+  DELIVERY_FEE: 5,
+
   DELIVERY_SLOTS: [
     "8:00–10:00 AM",
     "10:00 AM–12:00 PM",
@@ -832,6 +839,17 @@ async function loadProducts() {
               false
         );
 
+    if (
+      data.deliveryFee !==
+      undefined
+    ) {
+
+      CONFIG.DELIVERY_FEE =
+        Number(
+          data.deliveryFee
+        ) || 0;
+    }
+
     console.log(
       `Loaded ${products.length} products.`,
       products
@@ -1422,7 +1440,7 @@ function renderCheckout() {
     return;
   }
 
-  const total =
+  const itemsTotal =
     cart.reduce(
       (sum, item) =>
         sum +
@@ -1434,6 +1452,15 @@ function renderCheckout() {
         ),
       0
     );
+
+  const deliveryFee =
+    Number(
+      CONFIG.DELIVERY_FEE
+    ) || 0;
+
+  const total =
+    itemsTotal +
+    deliveryFee;
 
   summary.innerHTML =
     cart
@@ -1463,6 +1490,18 @@ function renderCheckout() {
       .join("") +
 
     `
+
+      <div class="summary-row">
+
+        <span>
+          Delivery fee
+        </span>
+
+        <span>
+          ${money(deliveryFee)}
+        </span>
+
+      </div>
 
       <div class="summary-row">
 
