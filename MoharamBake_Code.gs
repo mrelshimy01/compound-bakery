@@ -1463,6 +1463,131 @@ function updateOrderItemsStatus(
 
 
 /* =========================================================
+   DELETE ORDER ITEMS FOR ONE ORDER
+========================================================= */
+
+/*
+ * Used by app-side cancellation.
+ *
+ * This intentionally deletes only the OrderItems belonging to
+ * the order being cancelled. It does not depend on the
+ * installable onEdit trigger and does not scan/delete items
+ * belonging to other orders.
+ */
+function deleteOrderItemsForOrder(
+  orderId
+) {
+
+  orderId =
+    cleanValue(
+      orderId
+    );
+
+  if (!orderId) {
+    return 0;
+  }
+
+  const sheet =
+    getSheet(
+      CONFIG.SHEETS.ORDER_ITEMS
+    );
+
+  const headers =
+    getHeaders(
+      sheet
+    );
+
+  const orderIdIndex =
+    findColumn(
+      headers,
+      [
+        "Order ID",
+        "OrderId"
+      ]
+    );
+
+  if (
+    orderIdIndex < 0
+  ) {
+    return 0;
+  }
+
+  const lastRow =
+    sheet.getLastRow();
+
+  if (
+    lastRow < 2
+  ) {
+    return 0;
+  }
+
+  const lastColumn =
+    sheet.getLastColumn();
+
+  const values =
+    sheet
+      .getRange(
+        2,
+        1,
+        lastRow - 1,
+        lastColumn
+      )
+      .getValues();
+
+  const rowsToDelete =
+    [];
+
+  for (
+    let i = 0;
+    i < values.length;
+    i++
+  ) {
+
+    const rowOrderId =
+      cleanValue(
+        values[i][orderIdIndex]
+      );
+
+    if (
+      rowOrderId ===
+      orderId
+    ) {
+
+      rowsToDelete.push(
+        i + 2
+      );
+    }
+  }
+
+  /*
+   * Delete bottom-to-top so row numbers remain valid.
+   */
+  for (
+    let i =
+      rowsToDelete.length - 1;
+    i >= 0;
+    i--
+  ) {
+
+    sheet.deleteRow(
+      rowsToDelete[i]
+    );
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "OrderItems deleted for order " +
+    orderId +
+    ": " +
+    rowsToDelete.length
+  );
+
+  return rowsToDelete.length;
+}
+
+
+/* =========================================================
    SYNCHRONIZE EXISTING ORDERITEMS
 ========================================================= */
 
@@ -3649,17 +3774,23 @@ function cancelOrder(
 
 
     /*
-     * Do NOT rely on the trigger here.
+     * App-side cancellation must remove this order's
+     * OrderItems immediately.
      *
-     * The app should update OrderItems immediately.
+     * Do NOT rely on the spreadsheet onEdit trigger here:
+     * the Orders.Status change is made by the web app itself.
      */
-    updateOrderItemsStatus(
-      orderId,
-      CONFIG.CANCELLED_STATUS
+    const deletedOrderItems =
+      deleteOrderItemsForOrder(
+        orderId
+      );
+
+    Logger.log(
+      "Cancelled order " +
+      orderId +
+      ". Deleted OrderItems: " +
+      deletedOrderItems
     );
-
-
-    cleanupInactiveOrderItems();
 
 
     SpreadsheetApp.flush();
