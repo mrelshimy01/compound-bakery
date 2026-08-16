@@ -30,6 +30,8 @@ button,input{font:inherit}button{cursor:pointer;border:0}
 .cart-total{font-size:20px;font-weight:900;padding:18px 0}.full{width:100%}
 .toast{position:fixed;left:50%;bottom:22px;transform:translate(-50%,20px);opacity:0;background:#2c241f;color:#fff;padding:12px 16px;border-radius:12px;font-size:13px;z-index:50;transition:.2s}.toast.show{opacity:1;transform:translate(-50%,0)}
 .success{text-align:center;padding:34px 20px;margin-top:30px}.success-icon{width:64px;height:64px;border-radius:50%;background:#e5f3e7;color:#2c8b4b;display:grid;place-items:center;font-size:32px;font-weight:900;margin:0 auto 18px}.success h1{font-size:32px;margin:8px 0}.ref{font-weight:900;background:#f3ece6;border-radius:12px;padding:12px;margin:18px 0}
+.success .full{display:block}
+.success .full + .full{margin-top:12px}
 .cancel-info{font-size:12px;color:#8c7d72;margin:10px 0 12px}.empty-orders{text-align:center;padding:35px 20px}.empty-icon{font-size:42px;margin-bottom:10px}.empty-orders h3{margin:5px 0}.empty-orders p{color:#8c7d72;font-size:13px;margin-bottom:20px}
 .order-card{background:#fff;border:1px solid #eee6df;border-radius:18px;padding:17px;margin-bottom:12px;box-shadow:0 4px 14px rgba(55,35,20,.04)}
 .order-card-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px}.order-number{font-weight:900;font-size:15px}.order-date{color:#8c7d72;font-size:12px;margin-top:3px}
