@@ -1005,39 +1005,60 @@ function orderStatusChangeTrigger(e) {
  */
 function installOrderStatusTrigger() {
 
+  /*
+   * Always bind the installable trigger to the SAME spreadsheet
+   * used by the backend. Do not depend on the currently active
+   * spreadsheet, because this function may be run from the Apps
+   * Script editor or after a web-app deployment.
+   */
   const spreadsheet =
-    SpreadsheetApp.getActiveSpreadsheet();
+    getSpreadsheet();
 
   const triggers =
     ScriptApp.getProjectTriggers();
 
-  let exists =
-    false;
-
+  /*
+   * Remove duplicate/old installable triggers for this handler.
+   * This prevents multiple executions and makes re-running
+   * initializeSystem() safe.
+   */
   triggers.forEach(
     function(trigger) {
 
+      const handler =
+        trigger.getHandlerFunction();
+
       if (
-        trigger.getHandlerFunction() ===
+        handler ===
         "orderStatusChangeTrigger"
       ) {
-        exists = true;
+
+        ScriptApp.deleteTrigger(
+          trigger
+        );
       }
     }
   );
 
-  if (!exists) {
+  /*
+   * Create exactly ONE installable onEdit trigger.
+   * This trigger has authorization to update/delete rows in
+   * OrderItems, unlike relying only on a simple onEdit trigger.
+   */
+  ScriptApp
+    .newTrigger(
+      "orderStatusChangeTrigger"
+    )
+    .forSpreadsheet(
+      spreadsheet.getId()
+    )
+    .onEdit()
+    .create();
 
-    ScriptApp
-      .newTrigger(
-        "orderStatusChangeTrigger"
-      )
-      .forSpreadsheet(
-        spreadsheet
-      )
-      .onEdit()
-      .create();
-  }
+  Logger.log(
+    "Order status trigger installed for spreadsheet: " +
+    spreadsheet.getId()
+  );
 }
 
 
@@ -4132,6 +4153,12 @@ function runUserIdMigration() {
 function initializeSystem() {
 
   setupSystem();
+
+  /*
+   * Ensure the automatic Orders.Status -> OrderItems.Status
+   * synchronization trigger exists after every initialization.
+   */
+  installOrderStatusTrigger();
 
   runUserIdMigration();
 
