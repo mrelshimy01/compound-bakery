@@ -82,7 +82,12 @@
     <label>Full name<input id="name" required autocomplete="name" placeholder="Your name"></label>
     <label>Mobile number<input id="phone" required autocomplete="tel" inputmode="tel" placeholder="01xxxxxxxxx"></label>
     <label>Building / apartment<input id="address" required autocomplete="street-address" placeholder="e.g. Building 4, Apt 203"></label>
-    <div><div class="label">Tomorrow's delivery slot</div><div id="slots" class="slots"></div></div>
+    <div>
+      <div class="label">Delivery day</div>
+      <div id="dayTypeToggle" class="day-type-toggle"></div>
+      <div id="slotsLabel" class="label slots-label">Tomorrow's delivery slot</div>
+      <div id="slots" class="slots"></div>
+    </div>
     <div class="actions"><button type="button" id="back" class="secondary">Back</button><button class="primary" type="submit">Place order</button></div>
   </form>
 </section>
