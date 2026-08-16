@@ -11,9 +11,29 @@ const CONFIG = {
    */
   DELIVERY_FEE: 5,
 
+  /*
+   * Fallbacks only - the live values come from the backend's
+   * "products" response (sameDayCutoffHour / nextDayCancelCutoffHour)
+   * and overwrite these once products load.
+   */
+  SAME_DAY_CUTOFF_HOUR: 17,
+
+  NEXT_DAY_CANCEL_CUTOFF_HOUR: 22,
+
+  DELIVERY_TYPES: {
+    SAME_DAY: "Same Day",
+    NEXT_DAY: "Next Day"
+  },
+
   DELIVERY_SLOTS: [
-    "10:00 – 12:00 AM",
-    "8:00 – 10:00 PM"
+    "8:00–10:00 AM",
+    "10:00 AM–12:00 PM",
+    "12:00–2:00 PM",
+    "2:00–4:00 PM"
+  ],
+
+  SAME_DAY_SLOTS: [
+    "8:00–10:00 PM"
   ]
 };
 
@@ -42,6 +62,14 @@ let activeOrders = [];
 localStorage.removeItem("mb_active_orders");
 
 let selectedSlot = "";
+
+/*
+ * "Next Day" or "Same Day" - which slot list is showing and what
+ * gets sent to the backend / stamped on the order.
+ */
+let selectedDeliveryType =
+  CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
 let lastOrder = null;
 let deferredInstallPrompt = null;
 
@@ -490,7 +518,21 @@ function updateOrdersBadge() {
    CANCELLATION
 ========================================================= */
 
-function isCancellationOpen() {
+/*
+ * Same-day orders close for cancellation at the same cutoff they
+ * closed for ordering (5 PM by default). Next-day orders keep the
+ * original later cutoff (10 PM by default). Both hours come from
+ * CONFIG, which is synced from the backend once products load.
+ */
+function isCancellationOpen(
+  deliveryType
+) {
+
+  const cutoffHour =
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+      ? CONFIG.SAME_DAY_CUTOFF_HOUR
+      : CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR;
 
   const now =
     new Date();
@@ -499,13 +541,66 @@ function isCancellationOpen() {
     new Date(now);
 
   cutoff.setHours(
-    22,
+    cutoffHour,
     0,
     0,
     0
   );
 
   return now < cutoff;
+}
+
+
+/*
+ * Whether same-day ("tonight") delivery can still be selected right
+ * now, based on the device clock. The backend independently
+ * re-checks this at order time, so a stale clock can't bypass it.
+ */
+function isSameDayOrderingOpen() {
+
+  const now =
+    new Date();
+
+  const cutoff =
+    new Date(now);
+
+  cutoff.setHours(
+    CONFIG.SAME_DAY_CUTOFF_HOUR,
+    0,
+    0,
+    0
+  );
+
+  return now < cutoff;
+}
+
+
+function cancelCutoffLabel(
+  deliveryType
+) {
+
+  const cutoffHour =
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+      ? CONFIG.SAME_DAY_CUTOFF_HOUR
+      : CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR;
+
+  const suffix =
+    cutoffHour >= 12
+      ? "PM"
+      : "AM";
+
+  const hour12 =
+    (
+      (
+        cutoffHour +
+        11
+      ) %
+      12
+    ) +
+    1;
+
+  return `${hour12}:00 ${suffix}`;
 }
 
 
@@ -846,6 +941,28 @@ async function loadProducts() {
         Number(
           data.deliveryFee
         ) || 0;
+    }
+
+    if (
+      data.sameDayCutoffHour !==
+      undefined
+    ) {
+
+      CONFIG.SAME_DAY_CUTOFF_HOUR =
+        Number(
+          data.sameDayCutoffHour
+        ) || 17;
+    }
+
+    if (
+      data.nextDayCancelCutoffHour !==
+      undefined
+    ) {
+
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR =
+        Number(
+          data.nextDayCancelCutoffHour
+        ) || 22;
     }
 
     console.log(
@@ -1515,13 +1632,145 @@ function renderCheckout() {
 
     `;
 
+  const dayToggle =
+    $("dayTypeToggle");
+
+  const sameDayAvailable =
+    isSameDayOrderingOpen();
+
+  if (dayToggle) {
+
+    /*
+     * If same-day just closed (cutoff passed) while Today was
+     * selected, fall back to Tomorrow automatically.
+     */
+    if (
+      !sameDayAvailable &&
+      selectedDeliveryType ===
+      CONFIG.DELIVERY_TYPES.SAME_DAY
+    ) {
+
+      selectedDeliveryType =
+        CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+      selectedSlot = "";
+    }
+
+    dayToggle.innerHTML = `
+
+      <button
+        type="button"
+        class="day-type-option ${
+          selectedDeliveryType ===
+          CONFIG.DELIVERY_TYPES.NEXT_DAY
+            ? "selected"
+            : ""
+        }"
+        data-type="${
+          CONFIG.DELIVERY_TYPES.NEXT_DAY
+        }"
+      >
+        Tomorrow
+      </button>
+
+      <button
+        type="button"
+        class="day-type-option ${
+          selectedDeliveryType ===
+          CONFIG.DELIVERY_TYPES.SAME_DAY
+            ? "selected"
+            : ""
+        } ${
+          sameDayAvailable
+            ? ""
+            : "disabled"
+        }"
+        data-type="${
+          CONFIG.DELIVERY_TYPES.SAME_DAY
+        }"
+        ${
+          sameDayAvailable
+            ? ""
+            : "disabled"
+        }
+      >
+        Today
+        ${
+          sameDayAvailable
+            ? ""
+            : `<small>Closed after ${
+                cancelCutoffLabel(
+                  CONFIG.DELIVERY_TYPES.SAME_DAY
+                )
+              }</small>`
+        }
+      </button>
+
+    `;
+
+    dayToggle
+      .querySelectorAll(
+        ".day-type-option"
+      )
+      .forEach(
+        button => {
+
+          if (
+            button.disabled
+          ) {
+            return;
+          }
+
+          button.onclick =
+            () => {
+
+              if (
+                selectedDeliveryType ===
+                button.dataset.type
+              ) {
+                return;
+              }
+
+              selectedDeliveryType =
+                button.dataset.type;
+
+              /*
+               * Slot lists differ between Today/Tomorrow -
+               * clear any previous selection.
+               */
+              selectedSlot = "";
+
+              renderCheckout();
+            };
+        }
+      );
+  }
+
+  const slotsLabel =
+    $("slotsLabel");
+
+  if (slotsLabel) {
+
+    slotsLabel.textContent =
+      selectedDeliveryType ===
+      CONFIG.DELIVERY_TYPES.SAME_DAY
+        ? "Tonight's delivery slot"
+        : "Tomorrow's delivery slot";
+  }
+
+  const activeSlotList =
+    selectedDeliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+      ? CONFIG.SAME_DAY_SLOTS
+      : CONFIG.DELIVERY_SLOTS;
+
   const slots =
     $("slots");
 
   if (slots) {
 
     slots.innerHTML =
-      CONFIG.DELIVERY_SLOTS
+      activeSlotList
         .map(
           slot => `
 
@@ -1543,7 +1792,12 @@ function renderCheckout() {
               </strong>
 
               <small>
-                Tomorrow
+                ${
+                  selectedDeliveryType ===
+                  CONFIG.DELIVERY_TYPES.SAME_DAY
+                    ? "Tonight"
+                    : "Tomorrow"
+                }
               </small>
 
             </button>
@@ -1617,6 +1871,26 @@ async function createOrder() {
     toast(
       "Please select a delivery slot."
     );
+
+    return;
+  }
+
+  if (
+    selectedDeliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY &&
+    !isSameDayOrderingOpen()
+  ) {
+
+    toast(
+      "Same-day delivery is closed for today. Please choose Tomorrow."
+    );
+
+    selectedDeliveryType =
+      CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+    selectedSlot = "";
+
+    renderCheckout();
 
     return;
   }
@@ -1717,6 +1991,9 @@ async function createOrder() {
     deliverySlot:
       selectedSlot,
 
+    deliveryType:
+      selectedDeliveryType,
+
     items:
       cart.map(
         item => ({
@@ -1810,6 +2087,13 @@ async function createOrder() {
       slot:
         selectedSlot,
 
+      deliverySlot:
+        selectedSlot,
+
+      deliveryType:
+        result.deliveryType ||
+        selectedDeliveryType,
+
       status:
         "Active",
 
@@ -1846,6 +2130,14 @@ async function createOrder() {
     cart = [];
 
     saveCart();
+
+    /*
+     * Reset for the next order - default back to Tomorrow.
+     */
+    selectedSlot = "";
+
+    selectedDeliveryType =
+      CONFIG.DELIVERY_TYPES.NEXT_DAY;
 
     renderSuccess();
 
@@ -1918,16 +2210,26 @@ function renderSuccess() {
   if ($("cancelInfo")) {
 
     if (
-      isCancellationOpen()
+      isCancellationOpen(
+        lastOrder.deliveryType
+      )
     ) {
 
       $("cancelInfo").textContent =
-        "You can cancel this order before 10:00 PM.";
+        `You can cancel this order before ${
+          cancelCutoffLabel(
+            lastOrder.deliveryType
+          )
+        }.`;
 
     } else {
 
       $("cancelInfo").textContent =
-        "Cancellation is closed after 10:00 PM.";
+        `Cancellation is closed after ${
+          cancelCutoffLabel(
+            lastOrder.deliveryType
+          )
+        }.`;
     }
   }
 
@@ -1937,7 +2239,9 @@ function renderSuccess() {
   if (cancelButton) {
 
     cancelButton.style.display =
-      isCancellationOpen()
+      isCancellationOpen(
+        lastOrder.deliveryType
+      )
         ? "block"
         : "none";
 
@@ -2186,7 +2490,13 @@ function renderOrders() {
               .join("");
 
           const canCancel =
-            isCancellationOpen();
+            isCancellationOpen(
+              order.deliveryType
+            );
+
+          const isSameDay =
+            order.deliveryType ===
+            CONFIG.DELIVERY_TYPES.SAME_DAY;
 
           return `
 
@@ -2272,7 +2582,11 @@ function renderOrders() {
                 class="order-delivery"
               >
 
-                🚚 Tomorrow ·
+                🚚 ${
+                  isSameDay
+                    ? "Today"
+                    : "Tomorrow"
+                } ·
 
                 <strong>
 
@@ -2307,7 +2621,11 @@ function renderOrders() {
                       class="cancel-closed"
                     >
                       🔒 Cancellation closed
-                      at 10:00 PM
+                      at ${
+                        cancelCutoffLabel(
+                          order.deliveryType
+                        )
+                      }
                     </div>
 
                   `
@@ -2381,17 +2699,6 @@ async function cancelActiveOrder(
   fromSuccess = false
 ) {
 
-  if (
-    !isCancellationOpen()
-  ) {
-
-    toast(
-      "Orders can only be cancelled before 10 PM."
-    );
-
-    return;
-  }
-
   const order =
     activeOrders.find(
       item =>
@@ -2401,12 +2708,41 @@ async function cancelActiveOrder(
         String(
           orderId
         )
+    ) ||
+    (
+      fromSuccess &&
+      lastOrder &&
+      String(
+        lastOrder.orderId
+      ) ===
+      String(
+        orderId
+      )
+        ? lastOrder
+        : null
     );
 
   if (!order) {
 
     toast(
       "Order not found."
+    );
+
+    return;
+  }
+
+  if (
+    !isCancellationOpen(
+      order.deliveryType
+    )
+  ) {
+
+    toast(
+      `Orders can only be cancelled before ${
+        cancelCutoffLabel(
+          order.deliveryType
+        )
+      }.`
     );
 
     return;
