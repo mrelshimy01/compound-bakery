@@ -90,9 +90,6 @@ const CONFIG = {
   ACTIVE_STATUS:
     "Active",
 
-  DELIVERY_FEE:
-    5,
-
   CANCELLED_STATUS:
     "Cancelled",
 
@@ -2454,20 +2451,6 @@ function createOrder(
   );
 
 
-  /*
-   * Fixed delivery charge applied to every order.
-   * Product line items remain unchanged; the fee is added
-   * only to the order-level Total.
-   */
-  const deliveryFee =
-    Number(
-      CONFIG.DELIVERY_FEE || 0
-    );
-
-  orderTotal +=
-    deliveryFee;
-
-
   const lock =
     LockService
       .getScriptLock();
@@ -2663,12 +2646,6 @@ function createOrder(
 
       phone:
         phone,
-
-      subtotal:
-        orderTotal - deliveryFee,
-
-      deliveryFee:
-        deliveryFee,
 
       total:
         orderTotal,

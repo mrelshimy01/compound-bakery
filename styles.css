@@ -75,26 +75,3 @@ button,input{font:inherit}button{cursor:pointer;border:0}
   outline-offset: 4px;
   border-radius: 10px;
 }
-
-
-/* Delivery fee / total breakdown */
-.cart-total-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 5px 0;
-}
-
-.cart-grand-total {
-  margin-top: 6px;
-  padding-top: 10px;
-  border-top: 1px solid #eadfd4;
-  font-weight: 800;
-}
-
-.grand-total {
-  margin-top: 6px;
-  padding-top: 10px;
-  border-top: 1px solid #eadfd4;
-  font-weight: 800;
-}
