@@ -1,6 +1,6 @@
 const CONFIG = {
   API_URL:
-    "https://script.google.com/macros/s/AKfycbxsMWYLDCF0KMnKO9aJqWLaeOI1hBDEuUEtsiepLyZ2_o85UO11qpIngqiYkdGR2znCUw/exec",
+   "https://script.google.com/macros/s/AKfycbxsMWYLDCF0KMnKO9aJqWLaeOI1hBDEuUEtsiepLyZ2_o85UO11qpIngqiYkdGR2znCUw/exec",
 
   DEMO_MODE: false,
 
@@ -2237,6 +2237,22 @@ function renderOrders() {
               </div>
 
               ${items}
+
+              <div
+                class="order-item order-delivery-fee"
+              >
+
+                <span>
+                  Delivery fee
+                </span>
+
+                <span>
+                  ${money(
+                    CONFIG.DELIVERY_FEE
+                  )}
+                </span>
+
+              </div>
 
               <div
                 class="order-total"
