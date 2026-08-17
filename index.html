@@ -81,7 +81,27 @@
   <form id="checkoutForm" class="card form">
     <label>Full name<input id="name" required autocomplete="name" placeholder="Your name"></label>
     <label>Mobile number<input id="phone" required autocomplete="tel" inputmode="tel" placeholder="01xxxxxxxxx"></label>
-    <label>Building / apartment<input id="address" required autocomplete="street-address" placeholder="e.g. Building 4, Apt 203"></label>
+<label>
+  Building number
+  <input
+    id="building"
+    required
+    inputmode="text"
+    autocomplete="off"
+    placeholder="e.g. 4"
+  >
+</label>
+
+<label>
+  Apartment number
+  <input
+    id="apartment"
+    required
+    inputmode="text"
+    autocomplete="off"
+    placeholder="e.g. 203"
+  >
+</label>    
     <div>
       <div class="label">Delivery day</div>
       <div id="dayTypeToggle" class="day-type-toggle"></div>
