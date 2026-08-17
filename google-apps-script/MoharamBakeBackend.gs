@@ -99,6 +99,35 @@ const CONFIG = {
   DELIVERY_FEE:
     5,
 
+  /*
+   * Same-day ("tonight") orders must be placed, and can only be
+   * cancelled, before this hour (24h, script timezone). After this
+   * hour same-day delivery is no longer offered for that day.
+   */
+  SAME_DAY_CUTOFF_HOUR:
+    17,
+
+  /*
+   * Next-day orders can be cancelled any time on the day they were
+   * placed, up to the last minute before midnight (23:59). Once the
+   * calendar date changes, cancellation closes permanently for that
+   * order - see the same-calendar-day check in cancelOrder().
+   */
+  NEXT_DAY_CANCEL_CUTOFF_HOUR:
+    23,
+
+  NEXT_DAY_CANCEL_CUTOFF_MINUTE:
+    59,
+
+  DELIVERY_TYPES: {
+
+    SAME_DAY:
+      "Same Day",
+
+    NEXT_DAY:
+      "Next Day"
+  },
+
   USER_ID_PREFIX:
     "MBU-",
 
@@ -694,7 +723,7 @@ function generateUserId(phone) {
  * fast script property first and skip straight out if setup already
  * ran. Bump SETUP_VERSION if you add new required columns later.
  */
-var SETUP_VERSION = "v1";
+var SETUP_VERSION = "v3";
 
 function setupSystem() {
 
@@ -741,6 +770,8 @@ function setupSystem() {
       "Phone",
       "Address",
       "Delivery Slot",
+      "Delivery Type",
+      "Delivery Date",
       "Total",
       "Status",
       "Update"
@@ -2201,7 +2232,16 @@ function getProducts() {
       products,
 
     deliveryFee:
-      CONFIG.DELIVERY_FEE
+      CONFIG.DELIVERY_FEE,
+
+    sameDayCutoffHour:
+      CONFIG.SAME_DAY_CUTOFF_HOUR,
+
+    nextDayCancelCutoffHour:
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR,
+
+    nextDayCancelCutoffMinute:
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE
   };
 }
 
@@ -2523,6 +2563,22 @@ function createOrder(
     );
 
 
+  const deliveryType =
+    cleanValue(
+      payload.deliveryType ||
+      ""
+    ).toLowerCase() ===
+    "same day" ||
+    cleanValue(
+      payload.deliveryType ||
+      ""
+    ).toLowerCase() ===
+    "same_day" ||
+    payload.sameDay === true
+      ? CONFIG.DELIVERY_TYPES.SAME_DAY
+      : CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+
   const items =
     Array.isArray(
       payload.items
@@ -2567,6 +2623,24 @@ function createOrder(
 
     throw new Error(
       "Order must contain at least one item."
+    );
+  }
+
+
+  /*
+   * Enforce the same-day cutoff on the server, independent of the
+   * customer's device clock - defense in depth against the UI
+   * option being stale or bypassed.
+   */
+  if (
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY &&
+    getCurrentHour() >=
+    CONFIG.SAME_DAY_CUTOFF_HOUR
+  ) {
+
+    throw new Error(
+      "Same-day delivery orders must be placed before 5:00 PM."
     );
   }
 
@@ -2776,6 +2850,8 @@ function createOrder(
           "Phone",
           "Address",
           "Delivery Slot",
+          "Delivery Type",
+          "Delivery Date",
           "Total",
           "Status",
           "Update",
@@ -2789,6 +2865,8 @@ function createOrder(
     const phoneIndex = idx["Phone"];
     const addressIndex = idx["Address"];
     const slotIndex = idx["Delivery Slot"];
+    const deliveryTypeIndex = idx["Delivery Type"];
+    const deliveryDateIndex = idx["Delivery Date"];
     const totalIndex = idx["Total"];
     const statusIndex = idx["Status"];
     const updateIndex = idx["Update"];
@@ -2831,6 +2909,25 @@ function createOrder(
 
     row[slotIndex] =
       slot;
+
+
+    row[deliveryTypeIndex] =
+      deliveryType;
+
+
+    const deliveryTargetDate =
+      computeDeliveryTargetDate(
+        now,
+        deliveryType
+      );
+
+    const deliveryDateLabel =
+      formatDateLabel(
+        deliveryTargetDate
+      );
+
+    row[deliveryDateIndex] =
+      deliveryDateLabel;
 
 
     row[totalIndex] =
@@ -2903,6 +3000,15 @@ function createOrder(
       deliveryFee:
         CONFIG.DELIVERY_FEE,
 
+      deliveryType:
+        deliveryType,
+
+      deliveryDateLabel:
+        deliveryDateLabel,
+
+      deliverySlot:
+        slot,
+
       total:
         orderTotal,
 
@@ -2921,6 +3027,124 @@ function createOrder(
 /* =========================================================
    ORDER ID
 ========================================================= */
+
+/*
+ * Current hour (0-23) in the script's timezone. Used to enforce the
+ * same-day ordering/cancellation cutoff on the server, independent
+ * of the customer's device clock.
+ */
+function getCurrentHour() {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Number(
+    Utilities.formatDate(
+      new Date(),
+      timezone,
+      "H"
+    )
+  );
+}
+
+
+function getCurrentMinute() {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Number(
+    Utilities.formatDate(
+      new Date(),
+      timezone,
+      "m"
+    )
+  );
+}
+
+
+/*
+ * yyyy-MM-dd in the script's timezone - a comparable, DST-safe
+ * "calendar day" key. Two Date objects are "the same day" if this
+ * key matches, regardless of the time portion.
+ */
+function formatDateKey(
+  date
+) {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Utilities.formatDate(
+    date,
+    timezone,
+    "yyyy-MM-dd"
+  );
+}
+
+
+/*
+ * Human-friendly date for display, e.g. "Wed, Aug 19".
+ */
+function formatDateLabel(
+  date
+) {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Utilities.formatDate(
+    date,
+    timezone,
+    "EEE, MMM d"
+  );
+}
+
+
+function addDays(
+  date,
+  days
+) {
+
+  const result =
+    new Date(
+      date.getTime()
+    );
+
+  result.setDate(
+    result.getDate() +
+    days
+  );
+
+  return result;
+}
+
+
+/*
+ * The calendar date this order is actually meant to be delivered
+ * on: the placement date itself for Same Day orders, or the day
+ * after for Next Day orders.
+ */
+function computeDeliveryTargetDate(
+  createdAt,
+  deliveryType
+) {
+
+  return (
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+  )
+    ? createdAt
+    : addDays(
+        createdAt,
+        1
+      );
+}
+
 
 function generateOrderId() {
 
@@ -3204,6 +3428,16 @@ function getOrdersByUserId(
     );
 
 
+  const deliveryTypeIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Type",
+        "DeliveryType"
+      ]
+    );
+
+
   const totalIndex =
     findColumn(
       headers,
@@ -3308,6 +3542,70 @@ function getOrdersByUserId(
     }
 
 
+    /*
+     * Orders placed before this feature existed have no value
+     * here - treat them as Next Day (their original behavior).
+     */
+    const rowDeliveryType =
+      (
+        deliveryTypeIndex >= 0 &&
+        cleanValue(
+          row[deliveryTypeIndex]
+        )
+      ) ||
+      CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+
+    /*
+     * "Today" / "Tomorrow" and the date shown next to it are
+     * computed live against the CURRENT date, not fixed at order
+     * time - so an order placed yesterday for "tomorrow" correctly
+     * flips to "Today" once that calendar day actually arrives.
+     */
+    let dayLabel =
+      rowDeliveryType ===
+      CONFIG.DELIVERY_TYPES.SAME_DAY
+        ? "Today"
+        : "Tomorrow";
+
+    let deliveryDateLabel = "";
+
+    if (
+      createdIndex >= 0 &&
+      Object.prototype.toString.call(
+        row[createdIndex]
+      ) ===
+      "[object Date]"
+    ) {
+
+      const targetDate =
+        computeDeliveryTargetDate(
+          row[createdIndex],
+          rowDeliveryType
+        );
+
+      const targetKey =
+        formatDateKey(
+          targetDate
+        );
+
+      const todayKey =
+        formatDateKey(
+          new Date()
+        );
+
+      dayLabel =
+        targetKey <= todayKey
+          ? "Today"
+          : "Tomorrow";
+
+      deliveryDateLabel =
+        formatDateLabel(
+          targetDate
+        );
+    }
+
+
     orders.push({
 
       orderId:
@@ -3350,6 +3648,15 @@ function getOrdersByUserId(
               row[slotIndex]
             )
           : "",
+
+      deliveryType:
+        rowDeliveryType,
+
+      dayLabel:
+        dayLabel,
+
+      deliveryDateLabel:
+        deliveryDateLabel,
 
       total:
         totalIndex >= 0
@@ -3662,32 +3969,18 @@ function cancelOrder(
     new Date();
 
 
-  const timezone =
-    Session.getScriptTimeZone() ||
-    CONFIG.TIMEZONE;
-
-
   const hour =
-    Number(
-      Utilities.formatDate(
-        now,
-        timezone,
-        "H"
-      )
+    getCurrentHour();
+
+
+  const minute =
+    getCurrentMinute();
+
+
+  const todayKey =
+    formatDateKey(
+      now
     );
-
-
-  /*
-   * Cancellation is allowed before 10 PM only.
-   */
-  if (
-    hour >= 22
-  ) {
-
-    throw new Error(
-      "Orders cannot be cancelled after 10 PM."
-    );
-  }
 
 
   const sheet =
@@ -3742,6 +4035,27 @@ function cancelOrder(
       [
         "Update",
         "Updated At"
+      ]
+    );
+
+
+  const createdIndex =
+    findColumn(
+      headers,
+      [
+        "Created At",
+        "CreatedAt",
+        "Date"
+      ]
+    );
+
+
+  const deliveryTypeIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Type",
+        "DeliveryType"
       ]
     );
 
@@ -3814,6 +4128,83 @@ function cancelOrder(
       throw new Error(
         "This order is no longer active."
       );
+    }
+
+
+    const rowDeliveryType =
+      (
+        deliveryTypeIndex >= 0 &&
+        cleanValue(
+          row[deliveryTypeIndex]
+        )
+      ) ||
+      CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+
+    /*
+     * Once the calendar date has moved past the day this order was
+     * placed, it has already been sent to the bakery - cancellation
+     * closes permanently, regardless of the time of day. This is
+     * what actually fixes the "reopens after midnight" bug: the old
+     * check only compared the current hour to a fixed cutoff, so
+     * once the clock rolled past midnight the hour dropped back
+     * below the cutoff and cancellation looked open again.
+     */
+    if (
+      createdIndex >= 0 &&
+      Object.prototype.toString.call(
+        row[createdIndex]
+      ) ===
+      "[object Date]" &&
+      formatDateKey(
+        row[createdIndex]
+      ) !==
+      todayKey
+    ) {
+
+      throw new Error(
+        "This order can no longer be cancelled - it has already been sent to the bakery."
+      );
+    }
+
+
+    if (
+      rowDeliveryType ===
+      CONFIG.DELIVERY_TYPES.SAME_DAY
+    ) {
+
+      /*
+       * Same-day orders close for cancellation at the same
+       * cutoff they closed for ordering.
+       */
+      if (
+        hour >=
+        CONFIG.SAME_DAY_CUTOFF_HOUR
+      ) {
+
+        throw new Error(
+          "Same-day orders cannot be cancelled after 5:00 PM."
+        );
+      }
+
+    } else {
+
+      const cutoffPassed =
+        hour >
+        CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR ||
+        (
+          hour ===
+          CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR &&
+          minute >=
+          CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE
+        );
+
+      if (cutoffPassed) {
+
+        throw new Error(
+          "Orders cannot be cancelled after 11:59 PM."
+        );
+      }
     }
 
 
