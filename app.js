@@ -1,6 +1,6 @@
 const CONFIG = {
   API_URL:
-   "https://script.google.com/macros/s/AKfycbx5bsytVAW1uf1kDEM207eVctUrho1jJ4BTnUDyABn1mwqu68SKw7VV8hC-vn8QFBdG/exec",
+   "https://script.google.com/macros/s/AKfycbyzkCFz7iA2TJpDBAD9Xo-d9PjRqKzsP8nbzdzg7eMF5dlCAUBX3vBraKobcmp5bAiW5w/exec",
 
   DEMO_MODE: false,
 
@@ -13,12 +13,14 @@ const CONFIG = {
 
   /*
    * Fallbacks only - the live values come from the backend's
-   * "products" response (sameDayCutoffHour / nextDayCancelCutoffHour)
-   * and overwrite these once products load.
+   * "products" response (sameDayCutoffHour / nextDayCancelCutoffHour /
+   * nextDayCancelCutoffMinute) and overwrite these once products load.
    */
   SAME_DAY_CUTOFF_HOUR: 17,
 
-  NEXT_DAY_CANCEL_CUTOFF_HOUR: 22,
+  NEXT_DAY_CANCEL_CUTOFF_HOUR: 23,
+
+  NEXT_DAY_CANCEL_CUTOFF_MINUTE: 59,
 
   DELIVERY_TYPES: {
     SAME_DAY: "Same Day",
@@ -516,34 +518,88 @@ function updateOrdersBadge() {
    CANCELLATION
 ========================================================= */
 
-/*
- * Same-day orders close for cancellation at the same cutoff they
- * closed for ordering (5 PM by default). Next-day orders keep the
- * original later cutoff (10 PM by default). Both hours come from
- * CONFIG, which is synced from the backend once products load.
- */
-function isCancellationOpen(
-  deliveryType
+function isSameCalendarDay(
+  a,
+  b
 ) {
 
-  const cutoffHour =
-    deliveryType ===
-    CONFIG.DELIVERY_TYPES.SAME_DAY
-      ? CONFIG.SAME_DAY_CUTOFF_HOUR
-      : CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR;
+  return (
+    a.getFullYear() ===
+    b.getFullYear() &&
+    a.getMonth() ===
+    b.getMonth() &&
+    a.getDate() ===
+    b.getDate()
+  );
+}
+
+
+/*
+ * Cancellation is only ever allowed on the SAME calendar day an
+ * order was placed - once that day has passed, the order has
+ * already been sent to the bakery and cancellation closes
+ * permanently, no matter the time of day. Within that day, same-day
+ * orders close at 5 PM and next-day orders close at 23:59 (both
+ * come from CONFIG, synced from the backend once products load).
+ * The backend independently re-checks all of this, so a stale
+ * device clock can't bypass it.
+ */
+function isCancellationOpen(
+  order
+) {
 
   const now =
     new Date();
 
+  if (order && order.createdAt) {
+
+    const placedAt =
+      new Date(
+        order.createdAt
+      );
+
+    if (
+      !isNaN(
+        placedAt.getTime()
+      ) &&
+      !isSameCalendarDay(
+        placedAt,
+        now
+      )
+    ) {
+
+      return false;
+    }
+  }
+
+  const deliveryType =
+    order &&
+    order.deliveryType;
+
   const cutoff =
     new Date(now);
 
-  cutoff.setHours(
-    cutoffHour,
-    0,
-    0,
-    0
-  );
+  if (
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+  ) {
+
+    cutoff.setHours(
+      CONFIG.SAME_DAY_CUTOFF_HOUR,
+      0,
+      0,
+      0
+    );
+
+  } else {
+
+    cutoff.setHours(
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR,
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE,
+      0,
+      0
+    );
+  }
 
   return now < cutoff;
 }
@@ -573,32 +629,77 @@ function isSameDayOrderingOpen() {
 }
 
 
-function cancelCutoffLabel(
-  deliveryType
+function formatHourMinute(
+  hour,
+  minute
 ) {
 
-  const cutoffHour =
-    deliveryType ===
-    CONFIG.DELIVERY_TYPES.SAME_DAY
-      ? CONFIG.SAME_DAY_CUTOFF_HOUR
-      : CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR;
-
   const suffix =
-    cutoffHour >= 12
+    hour >= 12
       ? "PM"
       : "AM";
 
   const hour12 =
     (
       (
-        cutoffHour +
+        hour +
         11
       ) %
       12
     ) +
     1;
 
-  return `${hour12}:00 ${suffix}`;
+  return (
+    minute
+      ? `${hour12}:${
+          String(
+            minute
+          ).padStart(
+            2,
+            "0"
+          )
+        } ${suffix}`
+      : `${hour12}:00 ${suffix}`
+  );
+}
+
+
+function cancelCutoffLabel(
+  deliveryType
+) {
+
+  return (
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+  )
+    ? formatHourMinute(
+        CONFIG.SAME_DAY_CUTOFF_HOUR,
+        0
+      )
+    : formatHourMinute(
+        CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR,
+        CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE
+      );
+}
+
+
+/*
+ * "Wed, Aug 19" style label for a given Date, used beside
+ * "Today"/"Tomorrow"/"Tonight" so customers can see the actual
+ * delivery date, not just the relative word.
+ */
+function formatDayDateLabel(
+  date
+) {
+
+  return date.toLocaleDateString(
+    "en-US",
+    {
+      weekday: "short",
+      month: "short",
+      day: "numeric"
+    }
+  );
 }
 
 
@@ -960,7 +1061,18 @@ async function loadProducts() {
       CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR =
         Number(
           data.nextDayCancelCutoffHour
-        ) || 22;
+        ) || 23;
+    }
+
+    if (
+      data.nextDayCancelCutoffMinute !==
+      undefined
+    ) {
+
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE =
+        Number(
+          data.nextDayCancelCutoffMinute
+        ) || 0;
     }
 
     console.log(
@@ -1762,6 +1874,31 @@ function renderCheckout() {
       ? CONFIG.SAME_DAY_SLOTS
       : CONFIG.DELIVERY_SLOTS;
 
+  const slotTargetDate =
+    new Date();
+
+  if (
+    selectedDeliveryType !==
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+  ) {
+
+    slotTargetDate.setDate(
+      slotTargetDate.getDate() +
+      1
+    );
+  }
+
+  const slotDayLabel =
+    selectedDeliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+      ? "Tonight"
+      : "Tomorrow";
+
+  const slotDateLabel =
+    formatDayDateLabel(
+      slotTargetDate
+    );
+
   const slots =
     $("slots");
 
@@ -1790,12 +1927,8 @@ function renderCheckout() {
               </strong>
 
               <small>
-                ${
-                  selectedDeliveryType ===
-                  CONFIG.DELIVERY_TYPES.SAME_DAY
-                    ? "Tonight"
-                    : "Tomorrow"
-                }
+                ${slotDayLabel} ·
+                ${slotDateLabel}
               </small>
 
             </button>
@@ -2092,6 +2225,13 @@ async function createOrder() {
         result.deliveryType ||
         selectedDeliveryType,
 
+      deliveryDateLabel:
+        result.deliveryDateLabel ||
+        "",
+
+      createdAt:
+        new Date().toISOString(),
+
       status:
         "Active",
 
@@ -2209,7 +2349,7 @@ function renderSuccess() {
 
     if (
       isCancellationOpen(
-        lastOrder.deliveryType
+        lastOrder
       )
     ) {
 
@@ -2238,7 +2378,7 @@ function renderSuccess() {
 
     cancelButton.style.display =
       isCancellationOpen(
-        lastOrder.deliveryType
+        lastOrder
       )
         ? "block"
         : "none";
@@ -2489,7 +2629,7 @@ function renderOrders() {
 
           const canCancel =
             isCancellationOpen(
-              order.deliveryType
+              order
             );
 
           const isSameDay =
@@ -2581,9 +2721,12 @@ function renderOrders() {
               >
 
                 🚚 ${
-                  isSameDay
-                    ? "Today"
-                    : "Tomorrow"
+                  order.dayLabel ||
+                  (
+                    isSameDay
+                      ? "Today"
+                      : "Tomorrow"
+                  )
                 } ·
 
                 <strong>
@@ -2731,7 +2874,7 @@ async function cancelActiveOrder(
 
   if (
     !isCancellationOpen(
-      order.deliveryType
+      order
     )
   ) {
 
