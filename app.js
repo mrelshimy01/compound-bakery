@@ -292,9 +292,14 @@ function normalizeCustomer(data) {
         data.phone || ""
       ),
 
-    address:
+    building:
       String(
-        data.address || ""
+        data.building || ""
+      ).trim(),
+
+    apartment:
+      String(
+        data.apartment || ""
       ).trim()
   };
 }
@@ -1972,10 +1977,17 @@ function renderCheckout() {
         "";
     }
 
-    if ($("address")) {
+    if ($("building")) {
 
-      $("address").value =
-        customer.address ||
+      $("building").value =
+        customer.building ||
+        "";
+    }
+
+    if ($("apartment")) {
+
+      $("apartment").value =
+        customer.apartment ||
         "";
     }
   }
@@ -2034,13 +2046,17 @@ async function createOrder() {
       $("phone")?.value.trim()
     );
 
-  const address =
-    $("address")?.value.trim();
+  const building =
+    $("building")?.value.trim();
+
+  const apartment =
+    $("apartment")?.value.trim();
 
   if (
     !name ||
     !phone ||
-    !address
+    !building ||
+    !apartment
   ) {
 
     toast(
@@ -2096,7 +2112,9 @@ async function createOrder() {
 
     phone,
 
-    address
+    building,
+
+    apartment
   };
 
   const orderData = {
@@ -2114,7 +2132,8 @@ async function createOrder() {
 
     name,
     phone,
-    address,
+    building,
+    apartment,
 
     slot:
       selectedSlot,
