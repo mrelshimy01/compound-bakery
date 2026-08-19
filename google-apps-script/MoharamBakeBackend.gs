@@ -723,7 +723,7 @@ function generateUserId(phone) {
  * fast script property first and skip straight out if setup already
  * ran. Bump SETUP_VERSION if you add new required columns later.
  */
-var SETUP_VERSION = "v3";
+var SETUP_VERSION = "v4";
 
 function setupSystem() {
 
@@ -768,13 +768,15 @@ function setupSystem() {
       "Created At",
       "Name",
       "Phone",
-      "Address",
+      "Building",
+      "Apartment",
       "Delivery Slot",
       "Delivery Type",
       "Delivery Date",
       "Total",
       "Status",
-      "Update"
+      "Update",
+      "Delivery Man"
     ]
   );
 
@@ -808,7 +810,8 @@ function setupSystem() {
     [
       "Name",
       "Phone",
-      "Address",
+      "Building",
+      "Apartment",
       "Updated At"
     ]
   );
@@ -1204,6 +1207,494 @@ function installOrderStatusTrigger() {
   Logger.log(
     "Order status trigger installed for spreadsheet: " +
     spreadsheet.getId()
+  );
+}
+
+
+/* =========================================================
+   ARCHIVE SPREADSHEET
+========================================================= */
+
+/*
+ * A second, separate Google Sheet used purely for reference/
+ * analytics - old orders get moved here off the live Orders/
+ * OrderItems sheets so the live sheet stays small and fast, while
+ * nothing is ever lost. Created automatically on first use and
+ * remembered via a script property, so no manual setup is needed.
+ */
+function getArchiveSpreadsheet() {
+
+  const props =
+    PropertiesService.getScriptProperties();
+
+  const existingId =
+    props.getProperty(
+      "archiveSpreadsheetId"
+    );
+
+  if (existingId) {
+
+    try {
+
+      return SpreadsheetApp.openById(
+        existingId
+      );
+
+    } catch (error) {
+
+      /*
+       * The stored ID is no longer valid (sheet deleted/moved) -
+       * fall through and create a fresh one.
+       */
+    }
+  }
+
+  const archive =
+    SpreadsheetApp.create(
+      "MoharamBake — Orders Archive"
+    );
+
+  props.setProperty(
+    "archiveSpreadsheetId",
+    archive.getId()
+  );
+
+  Logger.log(
+    "Created archive spreadsheet: " +
+    archive.getUrl()
+  );
+
+  return archive;
+}
+
+
+function getOrCreateArchiveSheet(
+  archiveSpreadsheet,
+  name,
+  headers
+) {
+
+  let sheet =
+    archiveSpreadsheet.getSheetByName(
+      name
+    );
+
+  if (!sheet) {
+
+    sheet =
+      archiveSpreadsheet.insertSheet(
+        name
+      );
+  }
+
+  if (
+    sheet.getLastRow() <
+    1
+  ) {
+
+    sheet
+      .getRange(
+        1,
+        1,
+        1,
+        headers.length
+      )
+      .setValues([
+        headers
+      ]);
+  }
+
+  /*
+   * The very first sheet Apps Script creates in a new spreadsheet
+   * is named "Sheet1" - remove it once we've set up our own sheets.
+   */
+  const defaultSheet =
+    archiveSpreadsheet.getSheetByName(
+      "Sheet1"
+    );
+
+  if (
+    defaultSheet &&
+    archiveSpreadsheet.getSheets().length >
+    1
+  ) {
+
+    archiveSpreadsheet.deleteSheet(
+      defaultSheet
+    );
+  }
+
+  return sheet;
+}
+
+
+/*
+ * Archives orders that are either Cancelled, or whose delivery
+ * target date has already passed (i.e. should have been delivered
+ * by now) - along with their OrderItems - into the archive
+ * spreadsheet, then removes them from the live sheets.
+ *
+ * Safe to run repeatedly: only ever touches rows that qualify.
+ */
+function archiveOldOrders() {
+
+  const ordersSheet =
+    getSheet(
+      CONFIG.SHEETS.ORDERS
+    );
+
+  const ordersData =
+    getAllRows(
+      ordersSheet
+    );
+
+  if (
+    !ordersData.rows.length
+  ) {
+
+    return {
+
+      archivedOrders: 0,
+
+      archivedItems: 0
+    };
+  }
+
+  const headers =
+    ordersData.headers;
+
+  const orderIdIndex =
+    findColumn(
+      headers,
+      [
+        "Order ID"
+      ]
+    );
+
+  const statusIndex =
+    findColumn(
+      headers,
+      [
+        "Status"
+      ]
+    );
+
+  const createdIndex =
+    findColumn(
+      headers,
+      [
+        "Created At"
+      ]
+    );
+
+  const deliveryTypeIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Type",
+        "DeliveryType"
+      ]
+    );
+
+  const todayKey =
+    formatDateKey(
+      new Date()
+    );
+
+  const rowsToArchive =
+    [];
+
+  const orderIdsToArchive =
+    {};
+
+  ordersData.rows.forEach(
+    function(row, i) {
+
+      const status =
+        cleanValue(
+          row[statusIndex]
+        ).toLowerCase();
+
+      const isCancelled =
+        status ===
+        CONFIG.CANCELLED_STATUS.toLowerCase();
+
+      let isPastDelivery =
+        false;
+
+      if (
+        createdIndex >= 0 &&
+        Object.prototype.toString.call(
+          row[createdIndex]
+        ) ===
+        "[object Date]"
+      ) {
+
+        const rowDeliveryType =
+          (
+            deliveryTypeIndex >= 0 &&
+            cleanValue(
+              row[deliveryTypeIndex]
+            )
+          ) ||
+          CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+        const targetDate =
+          computeDeliveryTargetDate(
+            row[createdIndex],
+            rowDeliveryType
+          );
+
+        isPastDelivery =
+          formatDateKey(
+            targetDate
+          ) <
+          todayKey;
+      }
+
+      if (
+        isCancelled ||
+        isPastDelivery
+      ) {
+
+        rowsToArchive.push({
+
+          sheetRow:
+            i + 2,
+
+          values:
+            row
+        });
+
+        orderIdsToArchive[
+          cleanValue(
+            row[orderIdIndex]
+          )
+        ] = true;
+      }
+    }
+  );
+
+  if (
+    !rowsToArchive.length
+  ) {
+
+    return {
+
+      archivedOrders: 0,
+
+      archivedItems: 0
+    };
+  }
+
+  const itemsSheet =
+    getSheet(
+      CONFIG.SHEETS.ORDER_ITEMS
+    );
+
+  const itemsData =
+    getAllRows(
+      itemsSheet
+    );
+
+  const itemsOrderIdIndex =
+    findColumn(
+      itemsData.headers,
+      [
+        "Order ID"
+      ]
+    );
+
+  const itemRowsToArchive =
+    [];
+
+  itemsData.rows.forEach(
+    function(row, i) {
+
+      const rowOrderId =
+        cleanValue(
+          row[itemsOrderIdIndex]
+        );
+
+      if (
+        orderIdsToArchive[
+          rowOrderId
+        ]
+      ) {
+
+        itemRowsToArchive.push({
+
+          sheetRow:
+            i + 2,
+
+          values:
+            row
+        });
+      }
+    }
+  );
+
+
+  const archiveSpreadsheet =
+    getArchiveSpreadsheet();
+
+  const archiveOrdersSheet =
+    getOrCreateArchiveSheet(
+      archiveSpreadsheet,
+      "Orders",
+      headers
+    );
+
+  const archiveItemsSheet =
+    getOrCreateArchiveSheet(
+      archiveSpreadsheet,
+      "OrderItems",
+      itemsData.headers
+    );
+
+  archiveOrdersSheet
+    .getRange(
+      archiveOrdersSheet.getLastRow() +
+      1,
+      1,
+      rowsToArchive.length,
+      headers.length
+    )
+    .setValues(
+      rowsToArchive.map(
+        function(entry) {
+
+          return entry.values;
+        }
+      )
+    );
+
+  if (
+    itemRowsToArchive.length
+  ) {
+
+    archiveItemsSheet
+      .getRange(
+        archiveItemsSheet.getLastRow() +
+        1,
+        1,
+        itemRowsToArchive.length,
+        itemsData.headers.length
+      )
+      .setValues(
+        itemRowsToArchive.map(
+          function(entry) {
+
+            return entry.values;
+          }
+        )
+      );
+  }
+
+  /*
+   * Delete bottom-to-top so row numbers stay valid as we go.
+   */
+  for (
+    let i =
+      rowsToArchive.length - 1;
+    i >= 0;
+    i--
+  ) {
+
+    ordersSheet.deleteRow(
+      rowsToArchive[i].sheetRow
+    );
+  }
+
+  for (
+    let i =
+      itemRowsToArchive.length - 1;
+    i >= 0;
+    i--
+  ) {
+
+    itemsSheet.deleteRow(
+      itemRowsToArchive[i].sheetRow
+    );
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "Archived " +
+    rowsToArchive.length +
+    " orders and " +
+    itemRowsToArchive.length +
+    " order items."
+  );
+
+  return {
+
+    archivedOrders:
+      rowsToArchive.length,
+
+    archivedItems:
+      itemRowsToArchive.length
+  };
+}
+
+
+/*
+ * Run this manually from the Apps Script editor (select
+ * "runArchiveNow" in the function dropdown, then Run) any time you
+ * want to archive immediately instead of waiting for the nightly
+ * trigger.
+ */
+function runArchiveNow() {
+
+  const result =
+    archiveOldOrders();
+
+  Logger.log(
+    JSON.stringify(
+      result
+    )
+  );
+
+  return result;
+}
+
+
+function installArchiveTrigger() {
+
+  const triggers =
+    ScriptApp.getProjectTriggers();
+
+  triggers.forEach(
+    function(trigger) {
+
+      if (
+        trigger.getHandlerFunction() ===
+        "archiveOldOrders"
+      ) {
+
+        ScriptApp.deleteTrigger(
+          trigger
+        );
+      }
+    }
+  );
+
+  /*
+   * Once a day, well after the same-day/next-day cutoffs, so
+   * nothing gets archived while it might still be relevant.
+   */
+  ScriptApp
+    .newTrigger(
+      "archiveOldOrders"
+    )
+    .timeBased()
+    .everyDays(1)
+    .atHour(3)
+    .create();
+
+  Logger.log(
+    "Archive trigger installed (daily, ~3 AM)."
   );
 }
 
@@ -2294,7 +2785,8 @@ function upsertCustomer(
       [
         "Name",
         "Phone",
-        "Address",
+        "Building",
+        "Apartment",
         "Updated At",
         "User ID"
       ]
@@ -2302,7 +2794,8 @@ function upsertCustomer(
 
   const nameIndex = idx["Name"];
   const phoneIndex = idx["Phone"];
-  const addressIndex = idx["Address"];
+  const buildingIndex = idx["Building"];
+  const apartmentIndex = idx["Apartment"];
   const updatedIndex = idx["Updated At"];
   const userIdIndex = idx["User ID"];
 
@@ -2420,8 +2913,11 @@ function upsertCustomer(
     updatedRow[phoneIndex] =
       phone;
 
-    updatedRow[addressIndex] =
-      customer.address || "";
+    updatedRow[buildingIndex] =
+      customer.building || "";
+
+    updatedRow[apartmentIndex] =
+      customer.apartment || "";
 
     updatedRow[updatedIndex] =
       now;
@@ -2472,8 +2968,13 @@ function upsertCustomer(
     phone;
 
 
-  row[addressIndex] =
-    customer.address ||
+  row[buildingIndex] =
+    customer.building ||
+    "";
+
+
+  row[apartmentIndex] =
+    customer.apartment ||
     "";
 
 
@@ -2547,10 +3048,18 @@ function createOrder(
     );
 
 
-  const address =
+  const building =
     cleanValue(
-      customer.address ||
-      payload.address ||
+      customer.building ||
+      payload.building ||
+      ""
+    );
+
+
+  const apartment =
+    cleanValue(
+      customer.apartment ||
+      payload.apartment ||
       ""
     );
 
@@ -2603,10 +3112,18 @@ function createOrder(
   }
 
 
-  if (!address) {
+  if (!building) {
 
     throw new Error(
-      "Customer address is required."
+      "Building number is required."
+    );
+  }
+
+
+  if (!apartment) {
+
+    throw new Error(
+      "Apartment number is required."
     );
   }
 
@@ -2660,8 +3177,11 @@ function createOrder(
       phone:
         phone,
 
-      address:
-        address
+      building:
+        building,
+
+      apartment:
+        apartment
     }
   );
 
@@ -2848,13 +3368,15 @@ function createOrder(
           "Created At",
           "Name",
           "Phone",
-          "Address",
+          "Building",
+          "Apartment",
           "Delivery Slot",
           "Delivery Type",
           "Delivery Date",
           "Total",
           "Status",
           "Update",
+          "Delivery Man",
           "User ID"
         ]
       );
@@ -2863,7 +3385,8 @@ function createOrder(
     const createdIndex = idx["Created At"];
     const nameIndex = idx["Name"];
     const phoneIndex = idx["Phone"];
-    const addressIndex = idx["Address"];
+    const buildingIndex = idx["Building"];
+    const apartmentIndex = idx["Apartment"];
     const slotIndex = idx["Delivery Slot"];
     const deliveryTypeIndex = idx["Delivery Type"];
     const deliveryDateIndex = idx["Delivery Date"];
@@ -2903,8 +3426,12 @@ function createOrder(
       phone;
 
 
-    row[addressIndex] =
-      address;
+    row[buildingIndex] =
+      building;
+
+
+    row[apartmentIndex] =
+      apartment;
 
 
     row[slotIndex] =
@@ -3408,11 +3935,30 @@ function getOrdersByUserId(
     );
 
 
-  const addressIndex =
+  const buildingIndex =
     findColumn(
       headers,
       [
-        "Address"
+        "Building"
+      ]
+    );
+
+
+  const apartmentIndex =
+    findColumn(
+      headers,
+      [
+        "Apartment"
+      ]
+    );
+
+
+  const deliveryManIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Man",
+        "DeliveryMan"
       ]
     );
 
@@ -3635,10 +4181,24 @@ function getOrdersByUserId(
             )
           : "",
 
-      address:
-        addressIndex >= 0
+      building:
+        buildingIndex >= 0
           ? cleanValue(
-              row[addressIndex]
+              row[buildingIndex]
+            )
+          : "",
+
+      apartment:
+        apartmentIndex >= 0
+          ? cleanValue(
+              row[apartmentIndex]
+            )
+          : "",
+
+      deliveryMan:
+        deliveryManIndex >= 0
+          ? cleanValue(
+              row[deliveryManIndex]
             )
           : "",
 
@@ -4785,6 +5345,11 @@ function initializeSystem() {
    * synchronization trigger exists after every initialization.
    */
   installOrderStatusTrigger();
+
+  /*
+   * Ensure the nightly archive trigger exists too.
+   */
+  installArchiveTrigger();
 
   runUserIdMigration();
 
