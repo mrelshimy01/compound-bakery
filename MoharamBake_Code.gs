@@ -93,6 +93,41 @@ const CONFIG = {
   CANCELLED_STATUS:
     "Cancelled",
 
+  /*
+   * Fixed delivery fee added to every order's total at checkout.
+   */
+  DELIVERY_FEE:
+    5,
+
+  /*
+   * Same-day ("tonight") orders must be placed, and can only be
+   * cancelled, before this hour (24h, script timezone). After this
+   * hour same-day delivery is no longer offered for that day.
+   */
+  SAME_DAY_CUTOFF_HOUR:
+    17,
+
+  /*
+   * Next-day orders can be cancelled any time on the day they were
+   * placed, up to the last minute before midnight (23:59). Once the
+   * calendar date changes, cancellation closes permanently for that
+   * order - see the same-calendar-day check in cancelOrder().
+   */
+  NEXT_DAY_CANCEL_CUTOFF_HOUR:
+    23,
+
+  NEXT_DAY_CANCEL_CUTOFF_MINUTE:
+    59,
+
+  DELIVERY_TYPES: {
+
+    SAME_DAY:
+      "Same Day",
+
+    NEXT_DAY:
+      "Next Day"
+  },
+
   USER_ID_PREFIX:
     "MBU-",
 
@@ -108,11 +143,25 @@ const CONFIG = {
    BASIC HELPERS
 ========================================================= */
 
+/*
+ * Memoized per execution. SpreadsheetApp.openById() is a real network
+ * round trip (often 300-800ms on its own) - the old code called this
+ * indirectly 5-10+ times per request (once per getSheet() call). We
+ * only ever need it once per execution.
+ */
+var _CACHED_SPREADSHEET_ = null;
+
 function getSpreadsheet() {
 
-  return SpreadsheetApp.openById(
-    CONFIG.SPREADSHEET_ID
-  );
+  if (!_CACHED_SPREADSHEET_) {
+
+    _CACHED_SPREADSHEET_ =
+      SpreadsheetApp.openById(
+        CONFIG.SPREADSHEET_ID
+      );
+  }
+
+  return _CACHED_SPREADSHEET_;
 }
 
 
@@ -269,6 +318,77 @@ function ensureHeader(
     );
 
   return newColumn - 1;
+}
+
+
+/*
+ * Looks up several header names on a sheet in a SINGLE round trip,
+ * instead of calling ensureHeader() once per column (each of which
+ * was its own separate getHeaders() API call - the old createOrder/
+ * upsertCustomer/saveOrderItems chained 5-10 of these back to back,
+ * which alone accounted for several seconds of order-placing time).
+ *
+ * Any header that's genuinely missing gets appended in one batched
+ * write. Returns { "Header Name": columnIndex, ... } (0-based).
+ */
+function getHeaderIndexes(
+  sheet,
+  requiredHeaders
+) {
+
+  let headers =
+    getHeaders(
+      sheet
+    );
+
+  const missing =
+    requiredHeaders.filter(
+      function(name) {
+
+        return (
+          findColumn(
+            headers,
+            [name]
+          ) < 0
+        );
+      }
+    );
+
+  if (missing.length) {
+
+    sheet
+      .getRange(
+        1,
+        headers.length + 1,
+        1,
+        missing.length
+      )
+      .setValues([
+        missing
+      ]);
+
+    headers =
+      headers.concat(
+        missing
+      );
+  }
+
+  const map = {};
+
+  requiredHeaders.forEach(
+    function(name) {
+
+      map[name] =
+        findColumn(
+          headers,
+          [name]
+        );
+    }
+  );
+
+  map._headers = headers;
+
+  return map;
 }
 
 
@@ -596,7 +716,26 @@ function generateUserId(phone) {
    SYSTEM SETUP
 ========================================================= */
 
+/*
+ * setupSystem() creates sheets/headers that, once they exist, never
+ * need to be checked again. The old code re-verified everything
+ * (15-20+ Sheets API calls) on EVERY request. We now check a single
+ * fast script property first and skip straight out if setup already
+ * ran. Bump SETUP_VERSION if you add new required columns later.
+ */
+var SETUP_VERSION = "v4";
+
 function setupSystem() {
+
+  const props =
+    PropertiesService.getScriptProperties();
+
+  if (
+    props.getProperty("setupVersion") ===
+    SETUP_VERSION
+  ) {
+    return;
+  }
 
   const spreadsheet =
     getSpreadsheet();
@@ -629,11 +768,15 @@ function setupSystem() {
       "Created At",
       "Name",
       "Phone",
-      "Address",
+      "Building",
+      "Apartment",
       "Delivery Slot",
+      "Delivery Type",
+      "Delivery Date",
       "Total",
       "Status",
-      "Update"
+      "Update",
+      "Delivery Man"
     ]
   );
 
@@ -667,7 +810,8 @@ function setupSystem() {
     [
       "Name",
       "Phone",
-      "Address",
+      "Building",
+      "Apartment",
       "Updated At"
     ]
   );
@@ -718,6 +862,11 @@ function setupSystem() {
 
 
   SpreadsheetApp.flush();
+
+  props.setProperty(
+    "setupVersion",
+    SETUP_VERSION
+  );
 }
 
 
@@ -1005,39 +1154,548 @@ function orderStatusChangeTrigger(e) {
  */
 function installOrderStatusTrigger() {
 
+  /*
+   * Always bind the installable trigger to the SAME spreadsheet
+   * used by the backend. Do not depend on the currently active
+   * spreadsheet, because this function may be run from the Apps
+   * Script editor or after a web-app deployment.
+   */
   const spreadsheet =
-    SpreadsheetApp.getActiveSpreadsheet();
+    getSpreadsheet();
 
   const triggers =
     ScriptApp.getProjectTriggers();
 
-  let exists =
-    false;
+  /*
+   * Remove duplicate/old installable triggers for this handler.
+   * This prevents multiple executions and makes re-running
+   * initializeSystem() safe.
+   */
+  triggers.forEach(
+    function(trigger) {
+
+      const handler =
+        trigger.getHandlerFunction();
+
+      if (
+        handler ===
+        "orderStatusChangeTrigger"
+      ) {
+
+        ScriptApp.deleteTrigger(
+          trigger
+        );
+      }
+    }
+  );
+
+  /*
+   * Create exactly ONE installable onEdit trigger.
+   * This trigger has authorization to update/delete rows in
+   * OrderItems, unlike relying only on a simple onEdit trigger.
+   */
+  ScriptApp
+    .newTrigger(
+      "orderStatusChangeTrigger"
+    )
+    .forSpreadsheet(
+      spreadsheet.getId()
+    )
+    .onEdit()
+    .create();
+
+  Logger.log(
+    "Order status trigger installed for spreadsheet: " +
+    spreadsheet.getId()
+  );
+}
+
+
+/* =========================================================
+   ARCHIVE SPREADSHEET
+========================================================= */
+
+/*
+ * A second, separate Google Sheet used purely for reference/
+ * analytics - old orders get moved here off the live Orders/
+ * OrderItems sheets so the live sheet stays small and fast, while
+ * nothing is ever lost. Created automatically on first use and
+ * remembered via a script property, so no manual setup is needed.
+ */
+function getArchiveSpreadsheet() {
+
+  const props =
+    PropertiesService.getScriptProperties();
+
+  const existingId =
+    props.getProperty(
+      "archiveSpreadsheetId"
+    );
+
+  if (existingId) {
+
+    try {
+
+      return SpreadsheetApp.openById(
+        existingId
+      );
+
+    } catch (error) {
+
+      /*
+       * The stored ID is no longer valid (sheet deleted/moved) -
+       * fall through and create a fresh one.
+       */
+    }
+  }
+
+  const archive =
+    SpreadsheetApp.create(
+      "MoharamBake — Orders Archive"
+    );
+
+  props.setProperty(
+    "archiveSpreadsheetId",
+    archive.getId()
+  );
+
+  Logger.log(
+    "Created archive spreadsheet: " +
+    archive.getUrl()
+  );
+
+  return archive;
+}
+
+
+function getOrCreateArchiveSheet(
+  archiveSpreadsheet,
+  name,
+  headers
+) {
+
+  let sheet =
+    archiveSpreadsheet.getSheetByName(
+      name
+    );
+
+  if (!sheet) {
+
+    sheet =
+      archiveSpreadsheet.insertSheet(
+        name
+      );
+  }
+
+  if (
+    sheet.getLastRow() <
+    1
+  ) {
+
+    sheet
+      .getRange(
+        1,
+        1,
+        1,
+        headers.length
+      )
+      .setValues([
+        headers
+      ]);
+  }
+
+  /*
+   * The very first sheet Apps Script creates in a new spreadsheet
+   * is named "Sheet1" - remove it once we've set up our own sheets.
+   */
+  const defaultSheet =
+    archiveSpreadsheet.getSheetByName(
+      "Sheet1"
+    );
+
+  if (
+    defaultSheet &&
+    archiveSpreadsheet.getSheets().length >
+    1
+  ) {
+
+    archiveSpreadsheet.deleteSheet(
+      defaultSheet
+    );
+  }
+
+  return sheet;
+}
+
+
+/*
+ * Archives orders that are either Cancelled, or whose delivery
+ * target date has already passed (i.e. should have been delivered
+ * by now) - along with their OrderItems - into the archive
+ * spreadsheet, then removes them from the live sheets.
+ *
+ * Safe to run repeatedly: only ever touches rows that qualify.
+ */
+function archiveOldOrders() {
+
+  const ordersSheet =
+    getSheet(
+      CONFIG.SHEETS.ORDERS
+    );
+
+  const ordersData =
+    getAllRows(
+      ordersSheet
+    );
+
+  if (
+    !ordersData.rows.length
+  ) {
+
+    return {
+
+      archivedOrders: 0,
+
+      archivedItems: 0
+    };
+  }
+
+  const headers =
+    ordersData.headers;
+
+  const orderIdIndex =
+    findColumn(
+      headers,
+      [
+        "Order ID"
+      ]
+    );
+
+  const statusIndex =
+    findColumn(
+      headers,
+      [
+        "Status"
+      ]
+    );
+
+  const createdIndex =
+    findColumn(
+      headers,
+      [
+        "Created At"
+      ]
+    );
+
+  const deliveryTypeIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Type",
+        "DeliveryType"
+      ]
+    );
+
+  const todayKey =
+    formatDateKey(
+      new Date()
+    );
+
+  const rowsToArchive =
+    [];
+
+  const orderIdsToArchive =
+    {};
+
+  ordersData.rows.forEach(
+    function(row, i) {
+
+      const status =
+        cleanValue(
+          row[statusIndex]
+        ).toLowerCase();
+
+      const isCancelled =
+        status ===
+        CONFIG.CANCELLED_STATUS.toLowerCase();
+
+      let isPastDelivery =
+        false;
+
+      if (
+        createdIndex >= 0 &&
+        Object.prototype.toString.call(
+          row[createdIndex]
+        ) ===
+        "[object Date]"
+      ) {
+
+        const rowDeliveryType =
+          (
+            deliveryTypeIndex >= 0 &&
+            cleanValue(
+              row[deliveryTypeIndex]
+            )
+          ) ||
+          CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+        const targetDate =
+          computeDeliveryTargetDate(
+            row[createdIndex],
+            rowDeliveryType
+          );
+
+        isPastDelivery =
+          formatDateKey(
+            targetDate
+          ) <
+          todayKey;
+      }
+
+      if (
+        isCancelled ||
+        isPastDelivery
+      ) {
+
+        rowsToArchive.push({
+
+          sheetRow:
+            i + 2,
+
+          values:
+            row
+        });
+
+        orderIdsToArchive[
+          cleanValue(
+            row[orderIdIndex]
+          )
+        ] = true;
+      }
+    }
+  );
+
+  if (
+    !rowsToArchive.length
+  ) {
+
+    return {
+
+      archivedOrders: 0,
+
+      archivedItems: 0
+    };
+  }
+
+  const itemsSheet =
+    getSheet(
+      CONFIG.SHEETS.ORDER_ITEMS
+    );
+
+  const itemsData =
+    getAllRows(
+      itemsSheet
+    );
+
+  const itemsOrderIdIndex =
+    findColumn(
+      itemsData.headers,
+      [
+        "Order ID"
+      ]
+    );
+
+  const itemRowsToArchive =
+    [];
+
+  itemsData.rows.forEach(
+    function(row, i) {
+
+      const rowOrderId =
+        cleanValue(
+          row[itemsOrderIdIndex]
+        );
+
+      if (
+        orderIdsToArchive[
+          rowOrderId
+        ]
+      ) {
+
+        itemRowsToArchive.push({
+
+          sheetRow:
+            i + 2,
+
+          values:
+            row
+        });
+      }
+    }
+  );
+
+
+  const archiveSpreadsheet =
+    getArchiveSpreadsheet();
+
+  const archiveOrdersSheet =
+    getOrCreateArchiveSheet(
+      archiveSpreadsheet,
+      "Orders",
+      headers
+    );
+
+  const archiveItemsSheet =
+    getOrCreateArchiveSheet(
+      archiveSpreadsheet,
+      "OrderItems",
+      itemsData.headers
+    );
+
+  archiveOrdersSheet
+    .getRange(
+      archiveOrdersSheet.getLastRow() +
+      1,
+      1,
+      rowsToArchive.length,
+      headers.length
+    )
+    .setValues(
+      rowsToArchive.map(
+        function(entry) {
+
+          return entry.values;
+        }
+      )
+    );
+
+  if (
+    itemRowsToArchive.length
+  ) {
+
+    archiveItemsSheet
+      .getRange(
+        archiveItemsSheet.getLastRow() +
+        1,
+        1,
+        itemRowsToArchive.length,
+        itemsData.headers.length
+      )
+      .setValues(
+        itemRowsToArchive.map(
+          function(entry) {
+
+            return entry.values;
+          }
+        )
+      );
+  }
+
+  /*
+   * Delete bottom-to-top so row numbers stay valid as we go.
+   */
+  for (
+    let i =
+      rowsToArchive.length - 1;
+    i >= 0;
+    i--
+  ) {
+
+    ordersSheet.deleteRow(
+      rowsToArchive[i].sheetRow
+    );
+  }
+
+  for (
+    let i =
+      itemRowsToArchive.length - 1;
+    i >= 0;
+    i--
+  ) {
+
+    itemsSheet.deleteRow(
+      itemRowsToArchive[i].sheetRow
+    );
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "Archived " +
+    rowsToArchive.length +
+    " orders and " +
+    itemRowsToArchive.length +
+    " order items."
+  );
+
+  return {
+
+    archivedOrders:
+      rowsToArchive.length,
+
+    archivedItems:
+      itemRowsToArchive.length
+  };
+}
+
+
+/*
+ * Run this manually from the Apps Script editor (select
+ * "runArchiveNow" in the function dropdown, then Run) any time you
+ * want to archive immediately instead of waiting for the nightly
+ * trigger.
+ */
+function runArchiveNow() {
+
+  const result =
+    archiveOldOrders();
+
+  Logger.log(
+    JSON.stringify(
+      result
+    )
+  );
+
+  return result;
+}
+
+
+function installArchiveTrigger() {
+
+  const triggers =
+    ScriptApp.getProjectTriggers();
 
   triggers.forEach(
     function(trigger) {
 
       if (
         trigger.getHandlerFunction() ===
-        "orderStatusChangeTrigger"
+        "archiveOldOrders"
       ) {
-        exists = true;
+
+        ScriptApp.deleteTrigger(
+          trigger
+        );
       }
     }
   );
 
-  if (!exists) {
+  /*
+   * Once a day, well after the same-day/next-day cutoffs, so
+   * nothing gets archived while it might still be relevant.
+   */
+  ScriptApp
+    .newTrigger(
+      "archiveOldOrders"
+    )
+    .timeBased()
+    .everyDays(1)
+    .atHour(3)
+    .create();
 
-    ScriptApp
-      .newTrigger(
-        "orderStatusChangeTrigger"
-      )
-      .forSpreadsheet(
-        spreadsheet
-      )
-      .onEdit()
-      .create();
-  }
+  Logger.log(
+    "Archive trigger installed (daily, ~3 AM)."
+  );
 }
 
 
@@ -1442,6 +2100,131 @@ function updateOrderItemsStatus(
 
 
 /* =========================================================
+   DELETE ORDER ITEMS FOR ONE ORDER
+========================================================= */
+
+/*
+ * Used by app-side cancellation.
+ *
+ * This intentionally deletes only the OrderItems belonging to
+ * the order being cancelled. It does not depend on the
+ * installable onEdit trigger and does not scan/delete items
+ * belonging to other orders.
+ */
+function deleteOrderItemsForOrder(
+  orderId
+) {
+
+  orderId =
+    cleanValue(
+      orderId
+    );
+
+  if (!orderId) {
+    return 0;
+  }
+
+  const sheet =
+    getSheet(
+      CONFIG.SHEETS.ORDER_ITEMS
+    );
+
+  const headers =
+    getHeaders(
+      sheet
+    );
+
+  const orderIdIndex =
+    findColumn(
+      headers,
+      [
+        "Order ID",
+        "OrderId"
+      ]
+    );
+
+  if (
+    orderIdIndex < 0
+  ) {
+    return 0;
+  }
+
+  const lastRow =
+    sheet.getLastRow();
+
+  if (
+    lastRow < 2
+  ) {
+    return 0;
+  }
+
+  const lastColumn =
+    sheet.getLastColumn();
+
+  const values =
+    sheet
+      .getRange(
+        2,
+        1,
+        lastRow - 1,
+        lastColumn
+      )
+      .getValues();
+
+  const rowsToDelete =
+    [];
+
+  for (
+    let i = 0;
+    i < values.length;
+    i++
+  ) {
+
+    const rowOrderId =
+      cleanValue(
+        values[i][orderIdIndex]
+      );
+
+    if (
+      rowOrderId ===
+      orderId
+    ) {
+
+      rowsToDelete.push(
+        i + 2
+      );
+    }
+  }
+
+  /*
+   * Delete bottom-to-top so row numbers remain valid.
+   */
+  for (
+    let i =
+      rowsToDelete.length - 1;
+    i >= 0;
+    i--
+  ) {
+
+    sheet.deleteRow(
+      rowsToDelete[i]
+    );
+  }
+
+  SpreadsheetApp.flush();
+
+  Logger.log(
+    "OrderItems deleted for order " +
+    orderId +
+    ": " +
+    rowsToDelete.length
+  );
+
+  return rowsToDelete.length;
+}
+
+
+/* =========================================================
    SYNCHRONIZE EXISTING ORDERITEMS
 ========================================================= */
 
@@ -1760,6 +2543,40 @@ function cleanupInactiveOrderItems() {
    PRODUCTS
 ========================================================= */
 
+/*
+ * Products change rarely (edited by hand in the sheet), so we share
+ * one 5-minute CacheService cache between the "products" endpoint
+ * and createOrder's price lookup - avoids a full Products-sheet
+ * read on every single order placed.
+ */
+function getProductsCached() {
+
+  const cache =
+    CacheService.getScriptCache();
+
+  const cached =
+    cache.get("products_v1");
+
+  if (cached) {
+
+    return JSON.parse(
+      cached
+    );
+  }
+
+  const result =
+    getProducts();
+
+  cache.put(
+    "products_v1",
+    JSON.stringify(result),
+    300
+  );
+
+  return result;
+}
+
+
 function getProducts() {
 
   const sheet =
@@ -1903,7 +2720,19 @@ function getProducts() {
     ok: true,
 
     products:
-      products
+      products,
+
+    deliveryFee:
+      CONFIG.DELIVERY_FEE,
+
+    sameDayCutoffHour:
+      CONFIG.SAME_DAY_CUTOFF_HOUR,
+
+    nextDayCancelCutoffHour:
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR,
+
+    nextDayCancelCutoffMinute:
+      CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE
   };
 }
 
@@ -1950,36 +2779,25 @@ function upsertCustomer(
       CONFIG.SHEETS.CUSTOMERS
     );
 
-
-  const nameIndex =
-    ensureHeader(
+  const idx =
+    getHeaderIndexes(
       sheet,
-      "Name"
+      [
+        "Name",
+        "Phone",
+        "Building",
+        "Apartment",
+        "Updated At",
+        "User ID"
+      ]
     );
 
-  const phoneIndex =
-    ensureHeader(
-      sheet,
-      "Phone"
-    );
-
-  const addressIndex =
-    ensureHeader(
-      sheet,
-      "Address"
-    );
-
-  const updatedIndex =
-    ensureHeader(
-      sheet,
-      "Updated At"
-    );
-
-  const userIdIndex =
-    ensureHeader(
-      sheet,
-      "User ID"
-    );
+  const nameIndex = idx["Name"];
+  const phoneIndex = idx["Phone"];
+  const buildingIndex = idx["Building"];
+  const apartmentIndex = idx["Apartment"];
+  const updatedIndex = idx["Updated At"];
+  const userIdIndex = idx["User ID"];
 
 
   const phone =
@@ -2066,62 +2884,64 @@ function upsertCustomer(
     new Date();
 
 
+  const columnCount =
+    data.headers.length;
+
+
   if (
     existingRow !== -1
   ) {
 
-    sheet
-      .getRange(
-        existingRow,
-        nameIndex + 1
-      )
-      .setValue(
-        customer.name ||
-        ""
-      );
+    /*
+     * One batched write for the whole row instead of 5
+     * separate .getRange().setValue() round trips.
+     */
+    const updatedRow =
+      data.rows[existingRow - 2]
+        .slice();
 
+    while (
+      updatedRow.length <
+      columnCount
+    ) {
+      updatedRow.push("");
+    }
+
+    updatedRow[nameIndex] =
+      customer.name || "";
+
+    updatedRow[phoneIndex] =
+      phone;
+
+    updatedRow[buildingIndex] =
+      customer.building || "";
+
+    updatedRow[apartmentIndex] =
+      customer.apartment || "";
+
+    updatedRow[updatedIndex] =
+      now;
+
+    updatedRow[userIdIndex] =
+      userId;
 
     sheet
       .getRange(
         existingRow,
         phoneIndex + 1
       )
-      .setNumberFormat("@")
-      .setValue(
-        phone
-      );
-
+      .setNumberFormat("@");
 
     sheet
       .getRange(
         existingRow,
-        addressIndex + 1
+        1,
+        1,
+        columnCount
       )
-      .setValue(
-        customer.address ||
-        ""
-      );
-
-
-    sheet
-      .getRange(
-        existingRow,
-        updatedIndex + 1
-      )
-      .setValue(
-        now
-      );
-
-
-    sheet
-      .getRange(
-        existingRow,
-        userIdIndex + 1
-      )
-      .setValue(
-        userId
-      );
-
+      .setValues([
+        updatedRow
+      ]);
 
     SpreadsheetApp.flush();
 
@@ -2130,9 +2950,7 @@ function upsertCustomer(
 
 
   const headers =
-    getHeaders(
-      sheet
-    );
+    data.headers;
 
 
   const row =
@@ -2150,8 +2968,13 @@ function upsertCustomer(
     phone;
 
 
-  row[addressIndex] =
-    customer.address ||
+  row[buildingIndex] =
+    customer.building ||
+    "";
+
+
+  row[apartmentIndex] =
+    customer.apartment ||
     "";
 
 
@@ -2225,10 +3048,18 @@ function createOrder(
     );
 
 
-  const address =
+  const building =
     cleanValue(
-      customer.address ||
-      payload.address ||
+      customer.building ||
+      payload.building ||
+      ""
+    );
+
+
+  const apartment =
+    cleanValue(
+      customer.apartment ||
+      payload.apartment ||
       ""
     );
 
@@ -2239,6 +3070,22 @@ function createOrder(
       payload.slot ||
       ""
     );
+
+
+  const deliveryType =
+    cleanValue(
+      payload.deliveryType ||
+      ""
+    ).toLowerCase() ===
+    "same day" ||
+    cleanValue(
+      payload.deliveryType ||
+      ""
+    ).toLowerCase() ===
+    "same_day" ||
+    payload.sameDay === true
+      ? CONFIG.DELIVERY_TYPES.SAME_DAY
+      : CONFIG.DELIVERY_TYPES.NEXT_DAY;
 
 
   const items =
@@ -2265,10 +3112,18 @@ function createOrder(
   }
 
 
-  if (!address) {
+  if (!building) {
 
     throw new Error(
-      "Customer address is required."
+      "Building number is required."
+    );
+  }
+
+
+  if (!apartment) {
+
+    throw new Error(
+      "Apartment number is required."
     );
   }
 
@@ -2289,6 +3144,24 @@ function createOrder(
   }
 
 
+  /*
+   * Enforce the same-day cutoff on the server, independent of the
+   * customer's device clock - defense in depth against the UI
+   * option being stale or bypassed.
+   */
+  if (
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY &&
+    getCurrentHour() >=
+    CONFIG.SAME_DAY_CUTOFF_HOUR
+  ) {
+
+    throw new Error(
+      "Same-day delivery orders must be placed before 5:00 PM."
+    );
+  }
+
+
   const userId =
     generateUserId(
       phone
@@ -2304,14 +3177,17 @@ function createOrder(
       phone:
         phone,
 
-      address:
-        address
+      building:
+        building,
+
+      apartment:
+        apartment
     }
   );
 
 
   const productsResponse =
-    getProducts();
+    getProductsCached();
 
 
   const products =
@@ -2451,6 +3327,17 @@ function createOrder(
   );
 
 
+  const itemsTotal =
+    orderTotal;
+
+
+  /*
+   * Fixed delivery fee, added once per order.
+   */
+  orderTotal +=
+    CONFIG.DELIVERY_FEE;
+
+
   const lock =
     LockService
       .getScriptLock();
@@ -2473,80 +3360,44 @@ function createOrder(
       generateOrderId();
 
 
-    const orderIdIndex =
-      ensureHeader(
+    const idx =
+      getHeaderIndexes(
         ordersSheet,
-        "Order ID"
+        [
+          "Order ID",
+          "Created At",
+          "Name",
+          "Phone",
+          "Building",
+          "Apartment",
+          "Delivery Slot",
+          "Delivery Type",
+          "Delivery Date",
+          "Total",
+          "Status",
+          "Update",
+          "Delivery Man",
+          "User ID"
+        ]
       );
 
-
-    const createdIndex =
-      ensureHeader(
-        ordersSheet,
-        "Created At"
-      );
-
-
-    const nameIndex =
-      ensureHeader(
-        ordersSheet,
-        "Name"
-      );
-
-
-    const phoneIndex =
-      ensureHeader(
-        ordersSheet,
-        "Phone"
-      );
-
-
-    const addressIndex =
-      ensureHeader(
-        ordersSheet,
-        "Address"
-      );
-
-
-    const slotIndex =
-      ensureHeader(
-        ordersSheet,
-        "Delivery Slot"
-      );
-
-
-    const totalIndex =
-      ensureHeader(
-        ordersSheet,
-        "Total"
-      );
-
-
-    const statusIndex =
-      ensureHeader(
-        ordersSheet,
-        "Status"
-      );
-
-
-    const updateIndex =
-      ensureHeader(
-        ordersSheet,
-        "Update"
-      );
-
-
-    const userIdIndex =
-      ensureHeader(
-        ordersSheet,
-        "User ID"
-      );
+    const orderIdIndex = idx["Order ID"];
+    const createdIndex = idx["Created At"];
+    const nameIndex = idx["Name"];
+    const phoneIndex = idx["Phone"];
+    const buildingIndex = idx["Building"];
+    const apartmentIndex = idx["Apartment"];
+    const slotIndex = idx["Delivery Slot"];
+    const deliveryTypeIndex = idx["Delivery Type"];
+    const deliveryDateIndex = idx["Delivery Date"];
+    const totalIndex = idx["Total"];
+    const statusIndex = idx["Status"];
+    const updateIndex = idx["Update"];
+    const userIdIndex = idx["User ID"];
 
 
     const headers =
-      getHeaders(
-        ordersSheet
-      );
+      idx._headers;
 
 
     const row =
@@ -2575,12 +3426,35 @@ function createOrder(
       phone;
 
 
-    row[addressIndex] =
-      address;
+    row[buildingIndex] =
+      building;
+
+
+    row[apartmentIndex] =
+      apartment;
 
 
     row[slotIndex] =
       slot;
+
+
+    row[deliveryTypeIndex] =
+      deliveryType;
+
+
+    const deliveryTargetDate =
+      computeDeliveryTargetDate(
+        now,
+        deliveryType
+      );
+
+    const deliveryDateLabel =
+      formatDateLabel(
+        deliveryTargetDate
+      );
+
+    row[deliveryDateIndex] =
+      deliveryDateLabel;
 
 
     row[totalIndex] =
@@ -2647,6 +3521,21 @@ function createOrder(
       phone:
         phone,
 
+      itemsTotal:
+        itemsTotal,
+
+      deliveryFee:
+        CONFIG.DELIVERY_FEE,
+
+      deliveryType:
+        deliveryType,
+
+      deliveryDateLabel:
+        deliveryDateLabel,
+
+      deliverySlot:
+        slot,
+
       total:
         orderTotal,
 
@@ -2665,6 +3554,124 @@ function createOrder(
 /* =========================================================
    ORDER ID
 ========================================================= */
+
+/*
+ * Current hour (0-23) in the script's timezone. Used to enforce the
+ * same-day ordering/cancellation cutoff on the server, independent
+ * of the customer's device clock.
+ */
+function getCurrentHour() {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Number(
+    Utilities.formatDate(
+      new Date(),
+      timezone,
+      "H"
+    )
+  );
+}
+
+
+function getCurrentMinute() {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Number(
+    Utilities.formatDate(
+      new Date(),
+      timezone,
+      "m"
+    )
+  );
+}
+
+
+/*
+ * yyyy-MM-dd in the script's timezone - a comparable, DST-safe
+ * "calendar day" key. Two Date objects are "the same day" if this
+ * key matches, regardless of the time portion.
+ */
+function formatDateKey(
+  date
+) {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Utilities.formatDate(
+    date,
+    timezone,
+    "yyyy-MM-dd"
+  );
+}
+
+
+/*
+ * Human-friendly date for display, e.g. "Wed, Aug 19".
+ */
+function formatDateLabel(
+  date
+) {
+
+  const timezone =
+    Session.getScriptTimeZone() ||
+    CONFIG.TIMEZONE;
+
+  return Utilities.formatDate(
+    date,
+    timezone,
+    "EEE, MMM d"
+  );
+}
+
+
+function addDays(
+  date,
+  days
+) {
+
+  const result =
+    new Date(
+      date.getTime()
+    );
+
+  result.setDate(
+    result.getDate() +
+    days
+  );
+
+  return result;
+}
+
+
+/*
+ * The calendar date this order is actually meant to be delivered
+ * on: the placement date itself for Same Day orders, or the day
+ * after for Next Day orders.
+ */
+function computeDeliveryTargetDate(
+  createdAt,
+  deliveryType
+) {
+
+  return (
+    deliveryType ===
+    CONFIG.DELIVERY_TYPES.SAME_DAY
+  )
+    ? createdAt
+    : addDays(
+        createdAt,
+        1
+      );
+}
+
 
 function generateOrderId() {
 
@@ -2732,62 +3739,31 @@ function saveOrderItems(
     );
 
 
-  const orderIdIndex =
-    ensureHeader(
+  const idx =
+    getHeaderIndexes(
       sheet,
-      "Order ID"
+      [
+        "Order ID",
+        "Product ID",
+        "Product",
+        "Price",
+        "Quantity",
+        "Total",
+        "Status"
+      ]
     );
 
-
-  const productIdIndex =
-    ensureHeader(
-      sheet,
-      "Product ID"
-    );
-
-
-  const productIndex =
-    ensureHeader(
-      sheet,
-      "Product"
-    );
-
-
-  const priceIndex =
-    ensureHeader(
-      sheet,
-      "Price"
-    );
-
-
-  const quantityIndex =
-    ensureHeader(
-      sheet,
-      "Quantity"
-    );
-
-
-  const totalIndex =
-    ensureHeader(
-      sheet,
-      "Total"
-    );
-
-
-  /*
-   * IMPORTANT NEW COLUMN.
-   */
-  const statusIndex =
-    ensureHeader(
-      sheet,
-      "Status"
-    );
+  const orderIdIndex = idx["Order ID"];
+  const productIdIndex = idx["Product ID"];
+  const productIndex = idx["Product"];
+  const priceIndex = idx["Price"];
+  const quantityIndex = idx["Quantity"];
+  const totalIndex = idx["Total"];
+  const statusIndex = idx["Status"];
 
 
   const headers =
-    getHeaders(
-      sheet
-    );
+    idx._headers;
 
 
   const itemStatus =
@@ -2959,11 +3935,30 @@ function getOrdersByUserId(
     );
 
 
-  const addressIndex =
+  const buildingIndex =
     findColumn(
       headers,
       [
-        "Address"
+        "Building"
+      ]
+    );
+
+
+  const apartmentIndex =
+    findColumn(
+      headers,
+      [
+        "Apartment"
+      ]
+    );
+
+
+  const deliveryManIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Man",
+        "DeliveryMan"
       ]
     );
 
@@ -2975,6 +3970,16 @@ function getOrdersByUserId(
         "Delivery Slot",
         "DeliverySlot",
         "Slot"
+      ]
+    );
+
+
+  const deliveryTypeIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Type",
+        "DeliveryType"
       ]
     );
 
@@ -3083,6 +4088,70 @@ function getOrdersByUserId(
     }
 
 
+    /*
+     * Orders placed before this feature existed have no value
+     * here - treat them as Next Day (their original behavior).
+     */
+    const rowDeliveryType =
+      (
+        deliveryTypeIndex >= 0 &&
+        cleanValue(
+          row[deliveryTypeIndex]
+        )
+      ) ||
+      CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+
+    /*
+     * "Today" / "Tomorrow" and the date shown next to it are
+     * computed live against the CURRENT date, not fixed at order
+     * time - so an order placed yesterday for "tomorrow" correctly
+     * flips to "Today" once that calendar day actually arrives.
+     */
+    let dayLabel =
+      rowDeliveryType ===
+      CONFIG.DELIVERY_TYPES.SAME_DAY
+        ? "Today"
+        : "Tomorrow";
+
+    let deliveryDateLabel = "";
+
+    if (
+      createdIndex >= 0 &&
+      Object.prototype.toString.call(
+        row[createdIndex]
+      ) ===
+      "[object Date]"
+    ) {
+
+      const targetDate =
+        computeDeliveryTargetDate(
+          row[createdIndex],
+          rowDeliveryType
+        );
+
+      const targetKey =
+        formatDateKey(
+          targetDate
+        );
+
+      const todayKey =
+        formatDateKey(
+          new Date()
+        );
+
+      dayLabel =
+        targetKey <= todayKey
+          ? "Today"
+          : "Tomorrow";
+
+      deliveryDateLabel =
+        formatDateLabel(
+          targetDate
+        );
+    }
+
+
     orders.push({
 
       orderId:
@@ -3112,10 +4181,24 @@ function getOrdersByUserId(
             )
           : "",
 
-      address:
-        addressIndex >= 0
+      building:
+        buildingIndex >= 0
           ? cleanValue(
-              row[addressIndex]
+              row[buildingIndex]
+            )
+          : "",
+
+      apartment:
+        apartmentIndex >= 0
+          ? cleanValue(
+              row[apartmentIndex]
+            )
+          : "",
+
+      deliveryMan:
+        deliveryManIndex >= 0
+          ? cleanValue(
+              row[deliveryManIndex]
             )
           : "",
 
@@ -3125,6 +4208,15 @@ function getOrdersByUserId(
               row[slotIndex]
             )
           : "",
+
+      deliveryType:
+        rowDeliveryType,
+
+      dayLabel:
+        dayLabel,
+
+      deliveryDateLabel:
+        deliveryDateLabel,
 
       total:
         totalIndex >= 0
@@ -3437,32 +4529,18 @@ function cancelOrder(
     new Date();
 
 
-  const timezone =
-    Session.getScriptTimeZone() ||
-    CONFIG.TIMEZONE;
-
-
   const hour =
-    Number(
-      Utilities.formatDate(
-        now,
-        timezone,
-        "H"
-      )
+    getCurrentHour();
+
+
+  const minute =
+    getCurrentMinute();
+
+
+  const todayKey =
+    formatDateKey(
+      now
     );
-
-
-  /*
-   * Cancellation is allowed before 10 PM only.
-   */
-  if (
-    hour >= 22
-  ) {
-
-    throw new Error(
-      "Orders cannot be cancelled after 10 PM."
-    );
-  }
 
 
   const sheet =
@@ -3517,6 +4595,27 @@ function cancelOrder(
       [
         "Update",
         "Updated At"
+      ]
+    );
+
+
+  const createdIndex =
+    findColumn(
+      headers,
+      [
+        "Created At",
+        "CreatedAt",
+        "Date"
+      ]
+    );
+
+
+  const deliveryTypeIndex =
+    findColumn(
+      headers,
+      [
+        "Delivery Type",
+        "DeliveryType"
       ]
     );
 
@@ -3592,6 +4691,83 @@ function cancelOrder(
     }
 
 
+    const rowDeliveryType =
+      (
+        deliveryTypeIndex >= 0 &&
+        cleanValue(
+          row[deliveryTypeIndex]
+        )
+      ) ||
+      CONFIG.DELIVERY_TYPES.NEXT_DAY;
+
+
+    /*
+     * Once the calendar date has moved past the day this order was
+     * placed, it has already been sent to the bakery - cancellation
+     * closes permanently, regardless of the time of day. This is
+     * what actually fixes the "reopens after midnight" bug: the old
+     * check only compared the current hour to a fixed cutoff, so
+     * once the clock rolled past midnight the hour dropped back
+     * below the cutoff and cancellation looked open again.
+     */
+    if (
+      createdIndex >= 0 &&
+      Object.prototype.toString.call(
+        row[createdIndex]
+      ) ===
+      "[object Date]" &&
+      formatDateKey(
+        row[createdIndex]
+      ) !==
+      todayKey
+    ) {
+
+      throw new Error(
+        "This order can no longer be cancelled - it has already been sent to the bakery."
+      );
+    }
+
+
+    if (
+      rowDeliveryType ===
+      CONFIG.DELIVERY_TYPES.SAME_DAY
+    ) {
+
+      /*
+       * Same-day orders close for cancellation at the same
+       * cutoff they closed for ordering.
+       */
+      if (
+        hour >=
+        CONFIG.SAME_DAY_CUTOFF_HOUR
+      ) {
+
+        throw new Error(
+          "Same-day orders cannot be cancelled after 5:00 PM."
+        );
+      }
+
+    } else {
+
+      const cutoffPassed =
+        hour >
+        CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR ||
+        (
+          hour ===
+          CONFIG.NEXT_DAY_CANCEL_CUTOFF_HOUR &&
+          minute >=
+          CONFIG.NEXT_DAY_CANCEL_CUTOFF_MINUTE
+        );
+
+      if (cutoffPassed) {
+
+        throw new Error(
+          "Orders cannot be cancelled after 11:59 PM."
+        );
+      }
+    }
+
+
     const sheetRow =
       i + 2;
 
@@ -3628,17 +4804,23 @@ function cancelOrder(
 
 
     /*
-     * Do NOT rely on the trigger here.
+     * App-side cancellation must remove this order's
+     * OrderItems immediately.
      *
-     * The app should update OrderItems immediately.
+     * Do NOT rely on the spreadsheet onEdit trigger here:
+     * the Orders.Status change is made by the web app itself.
      */
-    updateOrderItemsStatus(
-      orderId,
-      CONFIG.CANCELLED_STATUS
+    const deletedOrderItems =
+      deleteOrderItemsForOrder(
+        orderId
+      );
+
+    Logger.log(
+      "Cancelled order " +
+      orderId +
+      ". Deleted OrderItems: " +
+      deletedOrderItems
     );
-
-
-    cleanupInactiveOrderItems();
 
 
     SpreadsheetApp.flush();
@@ -4101,7 +5283,27 @@ function deduplicateCustomers() {
    RUN USER ID MIGRATION
 ========================================================= */
 
+/*
+ * This is a one-time data migration (backfilling User ID / normalized
+ * phone columns onto existing rows), not something new orders need.
+ * The old code ran it - full sheet scan, one write call per row - on
+ * every "orders" load and every "createOrder". Now it runs once and
+ * remembers via a script property. To force it to run again (e.g.
+ * after manually editing the sheet), delete the "userIdMigrationDone"
+ * script property, or call repairUserData()/initializeSystem()
+ * directly from the Apps Script editor.
+ */
 function runUserIdMigration() {
+
+  const props =
+    PropertiesService.getScriptProperties();
+
+  if (
+    props.getProperty("userIdMigrationDone") ===
+    "true"
+  ) {
+    return;
+  }
 
   migrateCustomers();
 
@@ -4110,6 +5312,11 @@ function runUserIdMigration() {
   deduplicateCustomers();
 
   SpreadsheetApp.flush();
+
+  props.setProperty(
+    "userIdMigrationDone",
+    "true"
+  );
 }
 
 
@@ -4132,6 +5339,17 @@ function runUserIdMigration() {
 function initializeSystem() {
 
   setupSystem();
+
+  /*
+   * Ensure the automatic Orders.Status -> OrderItems.Status
+   * synchronization trigger exists after every initialization.
+   */
+  installOrderStatusTrigger();
+
+  /*
+   * Ensure the nightly archive trigger exists too.
+   */
+  installArchiveTrigger();
 
   runUserIdMigration();
 
@@ -4288,8 +5506,14 @@ function doGet(e) {
 
       setupSystem();
 
+      /*
+       * Products change rarely (you edit them by hand in the sheet).
+       * getProductsCached() shares one 5-minute cache with
+       * createOrder, so repeat app loads and order placement don't
+       * hit the Sheets API for this at all.
+       */
       return jsonResponse(
-        getProducts()
+        getProductsCached()
       );
     }
 
